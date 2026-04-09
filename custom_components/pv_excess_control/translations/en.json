@@ -1,0 +1,467 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Inverter Setup",
+        "description": "Configure your inverter type and grid voltage.",
+        "data": {
+          "inverter_type": "Inverter Type",
+          "grid_voltage": "Grid Voltage (V)"
+        },
+        "data_description": {
+          "inverter_type": "Select 'Hybrid' if your inverter has a battery connected.",
+          "grid_voltage": "Your local grid voltage (typically 230V in Europe, 120V in North America)."
+        }
+      },
+      "sensors": {
+        "title": "Sensor Mapping",
+        "description": "Map your Home Assistant sensors to PV Excess Control. You must provide either a Grid Export sensor or a Combined Import/Export sensor.",
+        "data": {
+          "pv_power": "PV Production Power Sensor",
+          "grid_export": "Grid Export Power Sensor",
+          "import_export_power": "Combined Import/Export Power Sensor",
+          "load_power": "Load Power Sensor",
+          "battery_soc": "Battery State of Charge Sensor",
+          "battery_power": "Combined Battery Power Sensor",
+          "battery_charge_power": "Battery Charge Power Sensor",
+          "battery_discharge_power": "Battery Discharge Power Sensor",
+          "battery_capacity": "Battery Capacity (kWh)"
+        },
+        "data_description": {
+          "pv_power": "Sensor that reports your current PV production in watts.",
+          "grid_export": "Sensor that reports power exported to the grid in watts.",
+          "import_export_power": "Combined sensor where positive = export, negative = import (in watts). Use this instead of Grid Export if your inverter provides a combined sensor.",
+          "load_power": "Sensor that reports your total household load in watts.",
+          "battery_soc": "Sensor that reports battery state of charge in percent.",
+          "battery_power": "Combined sensor where positive = charging, negative = discharging (in watts). Use this OR the separate charge/discharge sensors below.",
+          "battery_charge_power": "Sensor that reports battery charging power in watts. Use with Battery Discharge Sensor as an alternative to the combined Battery Power Sensor.",
+          "battery_discharge_power": "Sensor that reports battery discharging power in watts. Use with Battery Charge Sensor as an alternative to the combined Battery Power Sensor.",
+          "battery_capacity": "Total usable battery capacity in kilowatt-hours."
+        }
+      },
+      "energy": {
+        "title": "Energy Pricing",
+        "description": "Configure your electricity tariff for smart scheduling.",
+        "data": {
+          "tariff_provider": "Tariff Provider",
+          "price_sensor": "Electricity Price Sensor",
+          "cheap_price_threshold": "Cheap Price Threshold",
+          "battery_charge_price_threshold": "Battery Charge Price Threshold",
+          "feed_in_tariff": "Feed-in Tariff",
+          "feed_in_tariff_sensor": "Feed-in Tariff Sensor"
+        },
+        "data_description": {
+          "tariff_provider": "Select your electricity price provider integration.",
+          "price_sensor": "Select the sensor entity that provides the current electricity price. For Tibber, use the price sensor. For Octopus, select the electricity price sensor. For Awattar/Nordpool, select the spot price sensor.",
+          "cheap_price_threshold": "Price below which electricity is considered cheap.",
+          "battery_charge_price_threshold": "Price below which battery charging from grid is allowed.",
+          "feed_in_tariff": "Price received per kWh for energy exported to the grid.",
+          "feed_in_tariff_sensor": "Optional sensor for dynamic feed-in tariff (overrides static value)"
+        }
+      },
+      "forecast": {
+        "title": "Solar Forecast",
+        "description": "Configure solar production forecast for intelligent planning.",
+        "data": {
+          "forecast_provider": "Forecast Provider",
+          "forecast_sensor": "Forecast Sensor",
+          "forecast_tomorrow_sensor": "Tomorrow Forecast Sensor (optional)"
+        },
+        "data_description": {
+          "forecast_provider": "Select your solar forecast provider integration.",
+          "forecast_sensor": "Select the sensor entity that provides the solar forecast. For Solcast, select the forecast sensor that contains detailedForecast data (e.g., sensor.solcast_pv_forecast_forecast_today).",
+          "forecast_tomorrow_sensor": "Optional sensor for tomorrow's total forecast (e.g., sensor.solcast_pv_forecast_forecast_tomorrow). Enables weather pre-planning."
+        }
+      },
+      "battery": {
+        "title": "Battery Strategy",
+        "description": "Configure how your battery should be managed alongside appliance control.",
+        "data": {
+          "battery_strategy": "Battery Strategy",
+          "battery_target_soc": "Target State of Charge (%)",
+          "battery_target_time": "Target Time",
+          "allow_grid_charging": "Allow Grid Charging",
+          "battery_max_discharge_entity": "Battery Max Discharge Entity",
+          "battery_max_discharge_default": "Default Max Discharge Power (W)",
+          "min_battery_soc": "Minimum Battery SoC (%)"
+        },
+        "data_description": {
+          "battery_strategy": "How to prioritize battery charging vs. appliance control.",
+          "battery_target_soc": "Desired battery charge level to reach by target time.",
+          "battery_target_time": "Time by which the battery should reach the target SoC.",
+          "allow_grid_charging": "Allow charging the battery from the grid during cheap tariff periods.",
+          "battery_max_discharge_entity": "Entity to control maximum battery discharge power.",
+          "battery_max_discharge_default": "Default maximum discharge power when no override is active.",
+          "min_battery_soc": "When battery SoC drops below this threshold, all non-essential appliances are shed and battery discharge is blocked. Leave empty to disable."
+        }
+      },
+      "settings": {
+        "title": "Global Settings",
+        "description": "Configure global behavior, update intervals, and notification preferences.",
+        "data": {
+          "export_limit": "Export Limit (W)",
+          "off_threshold": "Shed Threshold (W)",
+          "controller_interval": "Controller Update Interval",
+          "planner_interval": "Planner Update Interval",
+          "plan_influence": "Plan Influence Mode",
+          "enable_preemption": "Enable Priority Preemption",
+          "notification_service": "Notification Service",
+          "notify_appliance_on": "Notify Appliance On",
+          "notify_appliance_off": "Notify Appliance Off",
+          "notify_daily_summary": "Notify Daily Summary"
+        },
+        "data_description": {
+          "export_limit": "Maximum power allowed to export to the grid (0 = no limit).",
+          "off_threshold": "Grid draw (negative watts) tolerated before the optimizer starts shedding appliances. Default: -50 W.",
+          "controller_interval": "How often the controller evaluates and adjusts appliances.",
+          "planner_interval": "How often the planner recalculates the daily schedule.",
+          "plan_influence": "Controls how the 24-hour planner influences real-time decisions. 'Light' lowers activation thresholds when the plan expects excess. 'Plan follows' actively schedules appliances based on forecast and tariff predictions. 'None' disables plan influence (pure reactive control).",
+          "enable_preemption": "When enabled, the optimizer can shed lower-priority appliances to start higher-priority ones that lack sufficient excess power. Disable to use simple priority-based allocation only.",
+          "notification_service": "HA notification service target (e.g., notify.mobile_app_phone)",
+          "notify_appliance_on": "Send a notification when an appliance is turned on by the integration.",
+          "notify_appliance_off": "Send a notification when an appliance is turned off by the integration.",
+          "notify_daily_summary": "Send a daily summary notification at midnight with energy stats."
+        }
+      }
+    },
+    "error": {
+      "invalid_voltage": "Grid voltage must be between 100V and 500V.",
+      "no_grid_sensor": "You must configure either a Grid Export sensor or a Combined Import/Export sensor.",
+      "missing_price_sensor": "A price sensor is required when a tariff provider is selected.",
+      "missing_forecast_sensor": "A forecast sensor is required when a forecast provider is selected.",
+      "invalid_soc": "State of charge must be between 0% and 100%."
+    },
+    "abort": {
+      "already_configured": "PV Excess Control is already configured."
+    }
+  },
+  "config_subentries": {
+    "appliance": {
+      "title": "Appliance",
+      "description": "Add an appliance to be controlled based on excess PV power or cheap grid tariffs.",
+      "step": {
+        "user": {
+          "title": "Add Appliance",
+          "description": "Configure the basic information and power profile for this appliance.",
+          "data": {
+            "appliance_name": "Appliance Name",
+            "appliance_entity": "Appliance Entity",
+            "appliance_priority": "Priority (1-1000)",
+            "nominal_power": "Nominal Power (W)",
+            "actual_power_entity": "Actual Power Sensor",
+            "phases": "Number of Phases"
+          },
+          "data_description": {
+            "appliance_name": "A friendly name for this appliance.",
+            "appliance_entity": "The switch or controllable entity for this appliance.",
+            "appliance_priority": "Lower number = higher priority. Appliances with higher priority get excess power first.",
+            "nominal_power": "The rated power consumption of this appliance in watts.",
+            "actual_power_entity": "Optional sensor that reports actual power consumption.",
+            "phases": "Number of electrical phases this appliance uses."
+          }
+        },
+        "current": {
+          "title": "Dynamic Current Settings",
+          "description": "Configure dynamic current control for variable-power appliances like EV chargers.",
+          "data": {
+            "dynamic_current": "Enable Dynamic Current Control",
+            "current_entity": "Current Control Entity",
+            "min_current": "Minimum Current (A)",
+            "max_current": "Maximum Current (A)",
+            "current_step": "Current Step Size (A)",
+            "ev_soc_entity": "EV State of Charge Sensor",
+            "ev_connected_entity": "EV Connected Sensor",
+            "ev_target_soc": "EV Target SoC"
+          },
+          "data_description": {
+            "dynamic_current": "Enable to control this appliance by adjusting its current rather than simple on/off.",
+            "current_entity": "Number entity to set the charging current.",
+            "min_current": "Minimum operating current in amperes.",
+            "max_current": "Maximum operating current in amperes.",
+            "current_step": "Resolution of current adjustments. 0.1A for fine-grained control, 1.0A for whole-amp steps. Match this to your device's supported resolution.",
+            "ev_soc_entity": "Sensor that reports the EV battery state of charge.",
+            "ev_connected_entity": "Binary sensor that indicates whether the EV is connected.",
+            "ev_target_soc": "Stop charging when EV reaches this state of charge (%)"
+          }
+        },
+        "constraints": {
+          "title": "Constraints & Grid Settings",
+          "description": "Configure runtime constraints, grid supplementation, and big consumer settings.",
+          "data": {
+            "switch_interval": "Minimum Switch Interval (s)",
+            "averaging_window": "Averaging Window (s)",
+            "on_only": "On Only (never turn off)",
+            "protect_from_preemption": "Protect From Preemption",
+            "min_daily_runtime": "Minimum Daily Runtime (min)",
+            "max_daily_runtime": "Maximum Daily Runtime (min)",
+            "max_daily_activations": "Max Daily Activations",
+            "on_threshold": "Activation Buffer (W)",
+            "schedule_deadline": "Schedule Deadline",
+            "start_after": "Start After",
+            "end_before": "End Before",
+            "allow_grid_supplement": "Allow Grid Supplementation",
+            "max_grid_power": "Maximum Grid Power (W)",
+            "is_big_consumer": "Big Consumer",
+            "battery_discharge_override": "Battery Discharge Override (W)",
+            "requires_appliance": "Requires Appliance",
+            "helper_only": "Run Only as Helper"
+          },
+          "data_description": {
+            "switch_interval": "Minimum time between switching this appliance on and off.",
+            "averaging_window": "Custom averaging window for excess power calculation. Shorter windows respond faster but may cause more switching. Leave empty to use the global default (1800 seconds / 30 minutes).",
+            "on_only": "If enabled, this appliance will only be turned on, never automatically turned off.",
+            "protect_from_preemption": "When enabled, this appliance will never be shed to make room for a higher-priority appliance.",
+            "min_daily_runtime": "Minimum number of minutes this appliance should run per day.",
+            "max_daily_runtime": "Maximum number of minutes this appliance may run per day.",
+            "max_daily_activations": "Maximum number of times this appliance may be turned on per day. Leave empty for unlimited.",
+            "on_threshold": "Extra excess power (watts) required above the appliance's minimum to trigger activation. Leave empty for default (200 W standard, 50 W dynamic current).",
+            "schedule_deadline": "Time by which the minimum daily runtime must be completed.",
+            "start_after": "Earliest time this appliance may operate. Leave empty for no restriction.",
+            "end_before": "Latest time this appliance may operate. Leave empty for no restriction.",
+            "allow_grid_supplement": "Allow using grid power to supplement PV excess for this appliance.",
+            "max_grid_power": "Maximum watts to draw from the grid when supplementing.",
+            "is_big_consumer": "Mark as big consumer to control battery discharge when active. Set 'Battery Discharge Override' below to define the discharge limit.",
+            "battery_discharge_override": "Override battery max discharge power (in watts) when this appliance is active.",
+            "requires_appliance": "Select an appliance that must be running before this one can start. E.g., a pool heat pump requires the pool pump.",
+            "helper_only": "When enabled, this appliance only runs when another appliance lists it as its required dependency. It will never run on its own based on excess power."
+          }
+        },
+        "reconfigure_basic": {
+          "title": "Edit Appliance",
+          "description": "Update the basic information and power profile for this appliance.",
+          "data": {
+            "appliance_name": "Appliance Name",
+            "appliance_entity": "Appliance Entity",
+            "appliance_priority": "Priority (1-1000)",
+            "nominal_power": "Nominal Power (W)",
+            "actual_power_entity": "Actual Power Sensor",
+            "phases": "Number of Phases"
+          },
+          "data_description": {
+            "appliance_name": "A friendly name for this appliance.",
+            "appliance_entity": "The switch or controllable entity for this appliance.",
+            "appliance_priority": "Lower number = higher priority. Appliances with higher priority get excess power first.",
+            "nominal_power": "The rated power consumption of this appliance in watts.",
+            "actual_power_entity": "Optional sensor that reports actual power consumption.",
+            "phases": "Number of electrical phases this appliance uses."
+          }
+        },
+        "reconfigure_current": {
+          "title": "Edit Dynamic Current Settings",
+          "description": "Update dynamic current control settings.",
+          "data": {
+            "dynamic_current": "Enable Dynamic Current Control",
+            "current_entity": "Current Control Entity",
+            "min_current": "Minimum Current (A)",
+            "max_current": "Maximum Current (A)",
+            "current_step": "Current Step Size (A)",
+            "ev_soc_entity": "EV State of Charge Sensor",
+            "ev_connected_entity": "EV Connected Sensor",
+            "ev_target_soc": "EV Target SoC"
+          },
+          "data_description": {
+            "dynamic_current": "Enable to control this appliance by adjusting its current rather than simple on/off.",
+            "current_entity": "Number entity to set the charging current.",
+            "min_current": "Minimum operating current in amperes.",
+            "max_current": "Maximum operating current in amperes.",
+            "current_step": "Resolution of current adjustments. 0.1A for fine-grained control, 1.0A for whole-amp steps. Match this to your device's supported resolution.",
+            "ev_soc_entity": "Sensor that reports the EV battery state of charge.",
+            "ev_connected_entity": "Binary sensor that indicates whether the EV is connected.",
+            "ev_target_soc": "Stop charging when EV reaches this state of charge (%)"
+          }
+        },
+        "reconfigure_constraints": {
+          "title": "Edit Constraints & Grid Settings",
+          "description": "Update runtime constraints, grid supplementation, and big consumer settings.",
+          "data": {
+            "switch_interval": "Minimum Switch Interval (s)",
+            "averaging_window": "Averaging Window (s)",
+            "on_only": "On Only (never turn off)",
+            "protect_from_preemption": "Protect From Preemption",
+            "min_daily_runtime": "Minimum Daily Runtime (min)",
+            "max_daily_runtime": "Maximum Daily Runtime (min)",
+            "max_daily_activations": "Max Daily Activations",
+            "on_threshold": "Activation Buffer (W)",
+            "schedule_deadline": "Schedule Deadline",
+            "start_after": "Start After",
+            "end_before": "End Before",
+            "allow_grid_supplement": "Allow Grid Supplementation",
+            "max_grid_power": "Maximum Grid Power (W)",
+            "is_big_consumer": "Big Consumer",
+            "battery_discharge_override": "Battery Discharge Override (W)",
+            "requires_appliance": "Requires Appliance",
+            "helper_only": "Run Only as Helper"
+          },
+          "data_description": {
+            "switch_interval": "Minimum time between switching this appliance on and off.",
+            "averaging_window": "Custom averaging window for excess power calculation. Shorter windows respond faster but may cause more switching. Leave empty to use the global default (1800 seconds / 30 minutes).",
+            "on_only": "If enabled, this appliance will only be turned on, never automatically turned off.",
+            "protect_from_preemption": "When enabled, this appliance will never be shed to make room for a higher-priority appliance.",
+            "min_daily_runtime": "Minimum number of minutes this appliance should run per day.",
+            "max_daily_runtime": "Maximum number of minutes this appliance may run per day.",
+            "max_daily_activations": "Maximum number of times this appliance may be turned on per day. Leave empty for unlimited.",
+            "on_threshold": "Extra excess power (watts) required above the appliance's minimum to trigger activation. Leave empty for default (200 W standard, 50 W dynamic current).",
+            "schedule_deadline": "Time by which the minimum daily runtime must be completed.",
+            "start_after": "Earliest time this appliance may operate. Leave empty for no restriction.",
+            "end_before": "Latest time this appliance may operate. Leave empty for no restriction.",
+            "allow_grid_supplement": "Allow using grid power to supplement PV excess for this appliance.",
+            "max_grid_power": "Maximum watts to draw from the grid when supplementing.",
+            "is_big_consumer": "Mark as big consumer to control battery discharge when active. Set 'Battery Discharge Override' below to define the discharge limit.",
+            "battery_discharge_override": "Override battery max discharge power (in watts) when this appliance is active.",
+            "requires_appliance": "Select an appliance that must be running before this one can start. E.g., a pool heat pump requires the pool pump.",
+            "helper_only": "When enabled, this appliance only runs when another appliance lists it as its required dependency. It will never run on its own based on excess power."
+          }
+        }
+      },
+      "error": {
+        "missing_name": "Appliance name is required.",
+        "missing_entity": "An appliance entity must be selected.",
+        "invalid_power": "Nominal power must be greater than 0.",
+        "missing_current_entity": "A current control entity is required when dynamic current is enabled.",
+        "invalid_current_range": "Minimum current must be less than maximum current.",
+        "invalid_runtime_range": "Minimum daily runtime must be less than or equal to maximum daily runtime.",
+        "missing_max_grid_power": "Maximum grid power is required when grid supplementation is enabled.",
+        "suggest_big_consumer": "This appliance draws 3000W or more. Consider enabling 'Big Consumer' to prevent battery discharge when active. Submit again to keep current setting.",
+        "circular_dependency": "Circular dependency: the selected appliance already depends on this one.",
+        "helper_only_with_requires": "An appliance cannot be both a helper and have its own dependency. Either clear 'Requires Appliance' or uncheck 'Run Only as Helper'."
+      },
+      "abort": {
+        "reconfigure_successful": "Appliance configuration updated successfully.",
+        "reconfigure_not_supported": "Reconfigure is not supported on this HA version. Please delete and re-add the appliance."
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "user": {
+        "title": "Inverter Setup",
+        "description": "Update your inverter type and grid voltage.",
+        "data": {
+          "inverter_type": "Inverter Type",
+          "grid_voltage": "Grid Voltage (V)"
+        },
+        "data_description": {
+          "inverter_type": "Select 'Hybrid' if your inverter has a battery connected.",
+          "grid_voltage": "Your local grid voltage (typically 230V in Europe, 120V in North America)."
+        }
+      },
+      "sensors": {
+        "title": "Sensor Mapping",
+        "description": "Update your sensor mappings.",
+        "data": {
+          "pv_power": "PV Production Power Sensor",
+          "grid_export": "Grid Export Power Sensor",
+          "import_export_power": "Combined Import/Export Power Sensor",
+          "load_power": "Load Power Sensor",
+          "battery_soc": "Battery State of Charge Sensor",
+          "battery_power": "Combined Battery Power Sensor",
+          "battery_charge_power": "Battery Charge Power Sensor",
+          "battery_discharge_power": "Battery Discharge Power Sensor",
+          "battery_capacity": "Battery Capacity (kWh)"
+        },
+        "data_description": {
+          "pv_power": "Sensor that reports your current PV production in watts.",
+          "grid_export": "Sensor that reports power exported to the grid in watts.",
+          "import_export_power": "Combined sensor where positive = export, negative = import (in watts). Use this instead of Grid Export if your inverter provides a combined sensor.",
+          "load_power": "Sensor that reports your total household load in watts.",
+          "battery_soc": "Sensor that reports battery state of charge in percent.",
+          "battery_power": "Combined sensor where positive = charging, negative = discharging (in watts). Use this OR the separate charge/discharge sensors below.",
+          "battery_charge_power": "Sensor that reports battery charging power in watts. Use with Battery Discharge Sensor as an alternative to the combined Battery Power Sensor.",
+          "battery_discharge_power": "Sensor that reports battery discharging power in watts. Use with Battery Charge Sensor as an alternative to the combined Battery Power Sensor.",
+          "battery_capacity": "Total usable battery capacity in kilowatt-hours."
+        }
+      },
+      "energy": {
+        "title": "Energy Pricing",
+        "description": "Update your electricity tariff settings.",
+        "data": {
+          "tariff_provider": "Tariff Provider",
+          "price_sensor": "Electricity Price Sensor",
+          "cheap_price_threshold": "Cheap Price Threshold",
+          "battery_charge_price_threshold": "Battery Charge Price Threshold",
+          "feed_in_tariff": "Feed-in Tariff",
+          "feed_in_tariff_sensor": "Feed-in Tariff Sensor"
+        },
+        "data_description": {
+          "tariff_provider": "Select your electricity price provider integration.",
+          "price_sensor": "Select the sensor entity that provides the current electricity price. For Tibber, use the price sensor. For Octopus, select the electricity price sensor. For Awattar/Nordpool, select the spot price sensor.",
+          "cheap_price_threshold": "Price below which electricity is considered cheap.",
+          "battery_charge_price_threshold": "Price below which battery charging from grid is allowed.",
+          "feed_in_tariff": "Price received per kWh for energy exported to the grid.",
+          "feed_in_tariff_sensor": "Optional sensor for dynamic feed-in tariff (overrides static value)"
+        }
+      },
+      "forecast": {
+        "title": "Solar Forecast",
+        "description": "Update your solar forecast configuration.",
+        "data": {
+          "forecast_provider": "Forecast Provider",
+          "forecast_sensor": "Forecast Sensor",
+          "forecast_tomorrow_sensor": "Tomorrow Forecast Sensor (optional)"
+        },
+        "data_description": {
+          "forecast_provider": "Select your solar forecast provider integration.",
+          "forecast_sensor": "Select the sensor entity that provides the solar forecast. For Solcast, select the forecast sensor that contains detailedForecast data (e.g., sensor.solcast_pv_forecast_forecast_today).",
+          "forecast_tomorrow_sensor": "Optional sensor for tomorrow's total forecast (e.g., sensor.solcast_pv_forecast_forecast_tomorrow). Enables weather pre-planning."
+        }
+      },
+      "battery": {
+        "title": "Battery Strategy",
+        "description": "Update your battery management strategy.",
+        "data": {
+          "battery_strategy": "Battery Strategy",
+          "battery_target_soc": "Target State of Charge (%)",
+          "battery_target_time": "Target Time",
+          "allow_grid_charging": "Allow Grid Charging",
+          "battery_max_discharge_entity": "Battery Max Discharge Entity",
+          "battery_max_discharge_default": "Default Max Discharge Power (W)",
+          "min_battery_soc": "Minimum Battery SoC (%)"
+        },
+        "data_description": {
+          "battery_strategy": "How to prioritize battery charging vs. appliance control.",
+          "battery_target_soc": "Desired battery charge level to reach by target time.",
+          "battery_target_time": "Time by which the battery should reach the target SoC.",
+          "allow_grid_charging": "Allow charging the battery from the grid during cheap tariff periods.",
+          "battery_max_discharge_entity": "Entity to control maximum battery discharge power.",
+          "battery_max_discharge_default": "Default maximum discharge power when no override is active.",
+          "min_battery_soc": "When battery SoC drops below this threshold, all non-essential appliances are shed and battery discharge is blocked. Leave empty to disable."
+        }
+      },
+      "settings": {
+        "title": "Global Settings",
+        "description": "Update global behavior, update intervals, and notification preferences.",
+        "data": {
+          "export_limit": "Export Limit (W)",
+          "off_threshold": "Shed Threshold (W)",
+          "controller_interval": "Controller Update Interval",
+          "planner_interval": "Planner Update Interval",
+          "plan_influence": "Plan Influence Mode",
+          "enable_preemption": "Enable Priority Preemption",
+          "notification_service": "Notification Service",
+          "notify_appliance_on": "Notify Appliance On",
+          "notify_appliance_off": "Notify Appliance Off",
+          "notify_daily_summary": "Notify Daily Summary"
+        },
+        "data_description": {
+          "export_limit": "Maximum power allowed to export to the grid (0 = no limit).",
+          "off_threshold": "Grid draw (negative watts) tolerated before the optimizer starts shedding appliances. Default: -50 W.",
+          "controller_interval": "How often the controller evaluates and adjusts appliances.",
+          "planner_interval": "How often the planner recalculates the daily schedule.",
+          "plan_influence": "Controls how the 24-hour planner influences real-time decisions. 'Light' lowers activation thresholds when the plan expects excess. 'Plan follows' actively schedules appliances based on forecast and tariff predictions. 'None' disables plan influence (pure reactive control).",
+          "enable_preemption": "When enabled, the optimizer can shed lower-priority appliances to start higher-priority ones that lack sufficient excess power. Disable to use simple priority-based allocation only.",
+          "notification_service": "HA notification service target (e.g., notify.mobile_app_phone)",
+          "notify_appliance_on": "Send a notification when an appliance is turned on by the integration.",
+          "notify_appliance_off": "Send a notification when an appliance is turned off by the integration.",
+          "notify_daily_summary": "Send a daily summary notification at midnight with energy stats."
+        }
+      }
+    },
+    "error": {
+      "invalid_voltage": "Grid voltage must be between 100V and 500V.",
+      "no_grid_sensor": "You must configure either a Grid Export sensor or a Combined Import/Export sensor.",
+      "missing_price_sensor": "A price sensor is required when a tariff provider is selected.",
+      "missing_forecast_sensor": "A forecast sensor is required when a forecast provider is selected.",
+      "invalid_soc": "State of charge must be between 0% and 100%."
+    }
+  }
+}
