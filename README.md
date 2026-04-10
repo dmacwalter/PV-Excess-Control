@@ -43,7 +43,7 @@ This integration is open source because I believe in giving back to the communit
 
 ### UI, Analytics & Integrations
 - **Solar Forecast Integration** - Solcast, Forecast.Solar, and generic forecast sensors.
-- **Full Dashboard Card** - Power flow visualization, appliance list, timeline, forecast, savings.
+- **Extensive Dashboard Examples** — Build your own dashboard with Mushroom, ApexCharts and other community cards. [Full YAML examples included](docs/dashboard-examples.md).
 - **Self-Consumption Analytics** - Track savings, self-consumption ratio, energy statistics.
 - **Manual Override** - Force appliances on/off from the dashboard.
 - **Configurable Notifications** - Per-event toggles for appliance changes, daily summaries, warnings.
@@ -78,7 +78,7 @@ This integration is open source because I believe in giving back to the communit
 2. **Configure your inverter** - Select Standard or Hybrid, then map your power sensors
 3. **Configure energy pricing** - Select your tariff provider or leave it as None
 4. **Add appliances** - Use the integration's sub-device UI to add each appliance
-5. **Add the dashboard card** - If installed manually (not via HACS), add the card resource first: Settings → Dashboards → Resources → Add `/hacsfiles/pv_excess_control/pv-excess-card.js` as JavaScript Module. Then add the card to your dashboard.
+5. **Set up your dashboard** — See the [Dashboard Examples](docs/dashboard-examples.md) for ready-to-use YAML configurations using popular community cards.
 
 See the [full documentation](docs/) for detailed setup guides.
 
@@ -102,8 +102,8 @@ See the [full documentation](docs/) for detailed setup guides.
   - [Notifications](docs/features/notifications.md)
   - [Analytics](docs/features/analytics.md)
 - [Dashboard](docs/dashboard/)
-  - [Card Setup](docs/dashboard/card-setup.md)
-  - [Custom Dashboards](docs/dashboard/custom-dashboards.md)
+  - [Dashboard Examples](docs/dashboard-examples.md)
+  - [Entity Reference](docs/dashboard/custom-dashboards.md)
 - [Advanced](docs/advanced/)
   - [How It Works](docs/advanced/how-it-works.md)
   - [Priority Guide](docs/advanced/priority-guide.md)

@@ -1,6 +1,6 @@
-# Custom Dashboards
+# Entity Reference
 
-If you prefer to build your own dashboard using individual entities rather than the built-in card, this page covers the key entities and example card configurations.
+This page documents all entities exposed by PV Excess Control and their attributes. Use this as a reference when building your dashboard. For complete, ready-to-use YAML examples, see the [Dashboard Examples](../dashboard-examples.md).
 
 ---
 
@@ -199,15 +199,3 @@ Add the integration's energy sensors to the Home Assistant Energy Dashboard for 
    - `sensor.pv_excess_control_heat_pump_energy_today`
    - (etc. for each appliance)
 3. Under **Solar Panels**, ensure your PV power sensor is already listed
-
----
-
-## Third-Party Cards
-
-The integration's entities work with any Lovelace card. Some useful community cards:
-
-- **mini-graph-card**: Compact sparkline charts for power trends
-- **power-flow-card-plus**: Full power flow animation (use the integration's sensors as sources)
-- **apexcharts-card**: Advanced charting for production vs. consumption analysis
-
-Install these via HACS -> Frontend.

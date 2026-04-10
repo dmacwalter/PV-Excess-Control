@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -21,12 +20,6 @@ PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.SELECT,
 ]
-
-# Frontend assets
-FRONTEND_DIR = Path(__file__).parent / "frontend"
-CARD_JS = "pv-excess-card.js"
-EDITOR_JS = "pv-excess-card-editor.js"
-
 
 # Keys that represent runtime state (toggled via switches/selects).
 # Changes to ONLY these keys should NOT trigger a full integration reload.
@@ -68,38 +61,6 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-async def _async_register_frontend(hass: HomeAssistant) -> None:
-    """Register frontend card static paths so the JS files are servable.
-
-    NOTE: We only register the static file paths here. We do NOT
-    auto-register Lovelace resources — that caused dashboard breakage
-    on some HA installations. Users should add the card resource via
-    HACS (automatic) or manually via Settings → Dashboards → Resources.
-    """
-    registered_key = f"{DOMAIN}_frontend_registered"
-    if hass.data.get(registered_key):
-        return
-    for filename in (CARD_JS, EDITOR_JS):
-        url_path = f"/hacsfiles/{DOMAIN}/{filename}"
-        file_path = str(FRONTEND_DIR / filename)
-        try:
-            from homeassistant.components.http import StaticPathConfig
-
-            await hass.http.async_register_static_paths(
-                [StaticPathConfig(url_path, file_path, False)]
-            )
-        except (ImportError, AttributeError):
-            try:
-                hass.http.register_static_path(
-                    url_path, file_path, cache_headers=False
-                )
-            except Exception:
-                _LOGGER.warning("Could not register static path: %s", url_path)
-        except Exception as err:
-            _LOGGER.warning("Could not register static path %s: %s", url_path, err)
-    hass.data[registered_key] = True
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up PV Excess Control from a config entry."""
     coordinator = PvExcessCoordinator(hass, entry)
@@ -132,9 +93,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(
         async_track_time_change(hass, _midnight_reset, hour=0, minute=0, second=0)
     )
-
-    # Register frontend static paths (no Lovelace resource injection)
-    await _async_register_frontend(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

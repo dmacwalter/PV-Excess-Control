@@ -42,7 +42,7 @@ Diese Integration ist Open Source, weil ich daran glaube, der Community, die Hom
 
 ### UI, Analyse & Integrationen
 - **Solarprognose-Integration** - Solcast, Forecast.Solar und generische Prognosesensoren.
-- **Vollständige Dashboard-Karte** - Leistungsfluss-Visualisierung, Geräteliste, Zeitleiste, Prognose, Einsparungen.
+- **Umfangreiche Dashboard-Beispiele** — Erstelle dein eigenes Dashboard mit Mushroom, ApexCharts und anderen Community-Karten. [Vollständige YAML-Beispiele enthalten](docs/dashboard-examples.md).
 - **Eigenverbrauchs-Analyse** - Verfolgen von Einsparungen, Eigenverbrauchsquote, Energiestatistiken.
 - **Manuelle Steuerung** - Forcieren von Ein-/Ausschalten von Geräten über das Dashboard.
 - **Konfigurierbare Benachrichtigungen** - Individuelle Schalter für Geräteänderungen, tägliche Zusammenfassungen, Warnungen.
@@ -77,7 +77,7 @@ Diese Integration ist Open Source, weil ich daran glaube, der Community, die Hom
 2. **Wechselrichter konfigurieren** - Wähle Standard oder Hybrid und weise dann deine Leistungssensoren zu
 3. **Strompreise konfigurieren** - Wähle deinen Tarifanbieter oder lasse es auf None
 4. **Geräte hinzufügen** - Verwende die Sub-Geräte-UI der Integration, um jedes Gerät hinzuzufügen ("+"-Symbol zum Hinzufügen von Geräten)
-5. **Dashboard-Karte hinzufügen** - Bei manueller Installation (nicht über HACS) füge zuerst die Kartenressource hinzu: Einstellungen → Dashboards → Ressourcen → `/hacsfiles/pv_excess_control/pv-excess-card.js` als JavaScript-Modul hinzufügen. Füge dann die Karte zu deinem Dashboard hinzu.
+5. **Dashboard einrichten** — Siehe die [Dashboard-Beispiele](docs/dashboard-examples.md) für fertige YAML-Konfigurationen mit beliebten Community-Karten.
 
 Siehe die [vollständige Dokumentation](docs/) für detaillierte Anleitungen (nur auf Englisch verfügbar).
 
@@ -101,8 +101,8 @@ Siehe die [vollständige Dokumentation](docs/) für detaillierte Anleitungen (nu
   - [Benachrichtigungen](docs/features/notifications.md)
   - [Analyse](docs/features/analytics.md)
 - [Dashboard](docs/dashboard/)
-  - [Karten-Einrichtung](docs/dashboard/card-setup.md)
-  - [Benutzerdefinierte Dashboards](docs/dashboard/custom-dashboards.md)
+  - [Dashboard-Beispiele](docs/dashboard-examples.md)
+  - [Entitäten-Referenz](docs/dashboard/custom-dashboards.md)
 - [Erweitert](docs/advanced/)
   - [Wie es funktioniert](docs/advanced/how-it-works.md)
   - [Prioritäten-Leitfaden](docs/advanced/priority-guide.md)

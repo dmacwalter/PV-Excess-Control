@@ -114,21 +114,6 @@ class PvExcessPowerSensor(PvExcessBaseSensor):
 
     def __init__(self, coordinator: PvExcessCoordinator) -> None:
         super().__init__(coordinator, "excess_power", "Excess Power")
-        cfg = coordinator.config_entry.data
-        key_map = {
-            "pv_power": "source_pv_power",
-            "grid_export": "source_grid_export",
-            "import_export_power": "source_import_export",
-            "load_power": "source_load_power",
-            "battery_soc": "source_battery_soc",
-            "battery_power": "source_battery_power",
-            "battery_charge_power": "source_battery_charge_power",
-            "battery_discharge_power": "source_battery_discharge_power",
-            "price_sensor": "source_price_sensor",
-            "forecast_sensor": "source_forecast_sensor",
-        }
-        source_attrs = {attr: cfg[key] for key, attr in key_map.items() if cfg.get(key)}
-        _LOGGER.debug("Excess power sensor source entities: %s", source_attrs)
 
     @property
     def native_value(self) -> float | None:
@@ -140,33 +125,6 @@ class PvExcessPowerSensor(PvExcessBaseSensor):
         if power_state is None:
             return None
         return power_state.excess_power
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose the configured source entity IDs so the Lovelace card
-        can read power flow values directly from the original sensors
-        (no data duplication).
-        """
-        cfg = self.coordinator.config_entry.data
-        attrs: dict[str, Any] = {}
-        # Map config keys to attribute names the card expects
-        key_map = {
-            "pv_power": "source_pv_power",
-            "grid_export": "source_grid_export",
-            "import_export_power": "source_import_export",
-            "load_power": "source_load_power",
-            "battery_soc": "source_battery_soc",
-            "battery_power": "source_battery_power",
-            "battery_charge_power": "source_battery_charge_power",
-            "battery_discharge_power": "source_battery_discharge_power",
-            "price_sensor": "source_price_sensor",
-            "forecast_sensor": "source_forecast_sensor",
-        }
-        for cfg_key, attr_name in key_map.items():
-            val = cfg.get(cfg_key)
-            if val:
-                attrs[attr_name] = val
-        return attrs
 
 
 class PvPlanConfidenceSensor(PvExcessBaseSensor):
