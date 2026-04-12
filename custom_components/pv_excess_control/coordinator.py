@@ -130,9 +130,32 @@ _UNAVAILABLE_STATES = {STATE_UNAVAILABLE, STATE_UNKNOWN, "none", ""}
 # Maximum number of power history entries to keep (~30 min at 30s intervals)
 MAX_HISTORY_SIZE = 60
 
+# Multipliers to normalise power values to watts.
+_POWER_UNIT_MULTIPLIERS: dict[str, float] = {
+    "w": 1.0,
+    "kw": 1000.0,
+    "mw": 1_000_000.0,
+}
 
-def _parse_sensor_float(hass: HomeAssistant, entity_id: str | None) -> float | None:
-    """Read a numeric sensor value, returning None if unavailable."""
+
+def _normalise_power(value: float, unit: str | None) -> float:
+    """Convert a power reading to watts based on its unit_of_measurement."""
+    if unit is None:
+        return value
+    return value * _POWER_UNIT_MULTIPLIERS.get(unit.lower().strip(), 1.0)
+
+
+def _parse_sensor_float(
+    hass: HomeAssistant,
+    entity_id: str | None,
+    *,
+    power: bool = False,
+) -> float | None:
+    """Read a numeric sensor value, returning None if unavailable.
+
+    When *power* is True the value is normalised to watts using the
+    sensor's ``unit_of_measurement`` attribute (kW → W, MW → W).
+    """
     if entity_id is None:
         return None
     state = hass.states.get(entity_id)
@@ -142,9 +165,11 @@ def _parse_sensor_float(hass: HomeAssistant, entity_id: str | None) -> float | N
         val = float(state.state)
         if math.isnan(val) or math.isinf(val):
             return None
-        return val
     except (ValueError, TypeError):
         return None
+    if power:
+        val = _normalise_power(val, state.attributes.get("unit_of_measurement"))
+    return val
 
 
 def _parse_sensor_bool(hass: HomeAssistant, entity_id: str | None) -> bool | None:
@@ -276,7 +301,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_discharge_limit: float | None = None
         discharge_entity = config_entry.data.get(CONF_BATTERY_MAX_DISCHARGE_ENTITY)
         if discharge_entity:
-            current_val = _parse_sensor_float(hass, discharge_entity)
+            current_val = _parse_sensor_float(hass, discharge_entity, power=True)
             if current_val is not None:
                 self._last_discharge_limit = current_val
 
@@ -707,8 +732,10 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data = self.config_entry.data
 
         # Required/optional sensor reads: do NOT collapse None to 0.0.
+        # Power sensors are read with power=True so that kW/MW values are
+        # automatically normalised to watts.
         pv_production: float | None = _parse_sensor_float(
-            self.hass, data.get(CONF_PV_POWER)
+            self.hass, data.get(CONF_PV_POWER), power=True,
         )
         self._track_sensor_availability(data.get(CONF_PV_POWER), pv_production)
 
@@ -720,7 +747,9 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if import_export_entity:
             # Combined sensor: positive = export, negative = import.
-            combined = _parse_sensor_float(self.hass, import_export_entity)
+            combined = _parse_sensor_float(
+                self.hass, import_export_entity, power=True,
+            )
             self._track_sensor_availability(import_export_entity, combined)
             if combined is None:
                 grid_export = None
@@ -729,12 +758,14 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 grid_export = max(combined, 0.0)
                 grid_import = abs(min(combined, 0.0))
         elif grid_export_entity:
-            grid_export = _parse_sensor_float(self.hass, grid_export_entity)
+            grid_export = _parse_sensor_float(
+                self.hass, grid_export_entity, power=True,
+            )
             self._track_sensor_availability(grid_export_entity, grid_export)
             grid_import = 0.0 if grid_export is not None else None
 
         load_power: float | None = _parse_sensor_float(
-            self.hass, data.get(CONF_LOAD_POWER)
+            self.hass, data.get(CONF_LOAD_POWER), power=True,
         )
         self._track_sensor_availability(data.get(CONF_LOAD_POWER), load_power)
 
@@ -747,10 +778,16 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         battery_discharge_entity = data.get(CONF_BATTERY_DISCHARGE_POWER)
 
         if battery_power_entity:
-            battery_power = _parse_sensor_float(self.hass, battery_power_entity)
+            battery_power = _parse_sensor_float(
+                self.hass, battery_power_entity, power=True,
+            )
         elif battery_charge_entity or battery_discharge_entity:
-            charge = _parse_sensor_float(self.hass, battery_charge_entity) or 0.0
-            discharge = _parse_sensor_float(self.hass, battery_discharge_entity) or 0.0
+            charge = _parse_sensor_float(
+                self.hass, battery_charge_entity, power=True,
+            ) or 0.0
+            discharge = _parse_sensor_float(
+                self.hass, battery_discharge_entity, power=True,
+            ) or 0.0
             battery_power = charge - discharge
 
         # Calculate excess. Branch selection is topology-based and identical
@@ -949,7 +986,9 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             current_power = 0.0
             if config.actual_power_entity:
                 current_power = (
-                    _parse_sensor_float(self.hass, config.actual_power_entity) or 0.0
+                    _parse_sensor_float(
+                        self.hass, config.actual_power_entity, power=True,
+                    ) or 0.0
                 )
 
             current_amperage: float | None = None
@@ -1023,7 +1062,8 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Refresh current_power from the actual power sensor
                 power_entity = sub_data.get(CONF_ACTUAL_POWER_ENTITY)
                 current_power = (
-                    _parse_sensor_float(self.hass, power_entity) or 0.0
+                    _parse_sensor_float(self.hass, power_entity, power=True)
+                    or 0.0
                 ) if power_entity else 0.0
 
                 states[sub_id] = ApplianceState(

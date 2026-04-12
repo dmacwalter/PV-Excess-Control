@@ -283,8 +283,8 @@ class TestOptionsStepSensors:
         assert _schema_has_key(result, CONF_PV_POWER)
 
     @pytest.mark.asyncio
-    async def test_options_step_sensors_rejects_no_grid_sensor(self):
-        """Sensors step rejects input with neither grid_export nor import_export."""
+    async def test_options_step_sensors_rejects_no_grid_or_load_sensor(self):
+        """Sensors step rejects input with none of grid_export, import_export, or load_power."""
         flow = _make_options_flow()
         flow.data[CONF_INVERTER_TYPE] = InverterType.STANDARD
 
@@ -295,6 +295,21 @@ class TestOptionsStepSensors:
         assert result["type"] == "form"
         assert result["step_id"] == "sensors"
         assert result["errors"]["base"] == "no_grid_sensor"
+
+    @pytest.mark.asyncio
+    async def test_options_step_sensors_accepts_pv_plus_load(self):
+        """Sensors step advances when PV + Load Power alone is provided."""
+        flow = _make_options_flow()
+        flow.data[CONF_INVERTER_TYPE] = InverterType.STANDARD
+
+        result = await flow.async_step_sensors(
+            user_input={
+                CONF_PV_POWER: "sensor.pv",
+                CONF_LOAD_POWER: "sensor.load_power",
+            }
+        )
+
+        assert result["step_id"] == "energy"
 
     @pytest.mark.asyncio
     async def test_options_step_sensors_accepts_grid_export(self):

@@ -217,21 +217,40 @@ class TestStepSensors:
         assert not _schema_has_key(result, CONF_BATTERY_CAPACITY)
 
     @pytest.mark.asyncio
-    async def test_step_sensors_requires_grid_sensor(self):
-        """At least one of grid_export or import_export must be provided."""
+    async def test_step_sensors_requires_grid_or_load_sensor(self):
+        """At least one of grid_export, import_export, or load_power must be provided."""
         flow = _make_flow()
         flow.data[CONF_INVERTER_TYPE] = InverterType.STANDARD
 
         result = await flow.async_step_sensors(
             user_input={
                 CONF_PV_POWER: "sensor.pv_power",
-                # Neither grid_export nor import_export_power provided
+                # None of grid_export, import_export_power, or load_power provided
             }
         )
 
         assert result["type"] == "form"
         assert result["step_id"] == "sensors"
         assert result["errors"]["base"] == "no_grid_sensor"
+
+    @pytest.mark.asyncio
+    async def test_step_sensors_accepts_pv_plus_load(self):
+        """PV + Load Power alone is accepted (coordinator uses pv - load)."""
+        flow = _make_flow()
+        flow.data[CONF_INVERTER_TYPE] = InverterType.STANDARD
+
+        result = await flow.async_step_sensors(
+            user_input={
+                CONF_PV_POWER: "sensor.pv_power",
+                CONF_LOAD_POWER: "sensor.load_power",
+            }
+        )
+
+        assert result["step_id"] == "energy"
+        assert flow.data[CONF_PV_POWER] == "sensor.pv_power"
+        assert flow.data[CONF_LOAD_POWER] == "sensor.load_power"
+        assert CONF_GRID_EXPORT not in flow.data
+        assert CONF_IMPORT_EXPORT not in flow.data
 
     @pytest.mark.asyncio
     async def test_step_sensors_accepts_grid_export(self):

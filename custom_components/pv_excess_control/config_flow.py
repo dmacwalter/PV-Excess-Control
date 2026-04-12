@@ -817,10 +817,13 @@ class PvExcessControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Validate: at least one of grid_export or import_export_power
+            # Validate: at least one of grid_export, import_export_power, or load_power.
+            # PV + Load alone is a valid configuration — the coordinator uses
+            # excess = pv - load when no grid sensor is configured.
             has_grid = bool(user_input.get(CONF_GRID_EXPORT))
             has_combined = bool(user_input.get(CONF_IMPORT_EXPORT))
-            if not has_grid and not has_combined:
+            has_load = bool(user_input.get(CONF_LOAD_POWER))
+            if not has_grid and not has_combined and not has_load:
                 errors["base"] = "no_grid_sensor"
 
             # For hybrid, battery fields are required (enforced by schema)
@@ -1086,7 +1089,8 @@ class PvExcessControlOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             has_grid = bool(user_input.get(CONF_GRID_EXPORT))
             has_combined = bool(user_input.get(CONF_IMPORT_EXPORT))
-            if not has_grid and not has_combined:
+            has_load = bool(user_input.get(CONF_LOAD_POWER))
+            if not has_grid and not has_combined and not has_load:
                 errors["base"] = "no_grid_sensor"
             if not errors:
                 self.data.update(user_input)
