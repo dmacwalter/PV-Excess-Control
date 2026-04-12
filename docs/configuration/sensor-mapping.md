@@ -8,15 +8,17 @@ The integration needs power sensors from your inverter to calculate excess solar
 
 | Sensor | Required? | Description |
 |--------|-----------|-------------|
-| PV Power | If no Import/Export | Watts currently produced by the solar panels |
-| Grid Export Power | If no Import/Export | Watts being sent to the grid (positive = export) |
+| PV Power | If no Import/Export | Power currently produced by the solar panels |
+| Grid Export Power | If no Import/Export | Power being sent to the grid (positive = export) |
 | Import/Export Power | Alternative | Combined grid sensor (positive = export, negative = import) |
-| Load Power | Optional | Total house consumption in watts |
+| Load Power | Optional | Total house consumption |
 | Battery SoC | Hybrid only | Battery state of charge (0-100 %) |
 | Battery Power | Hybrid only | Combined battery charge/discharge power (positive = charging) |
 | Battery Charge Power | Hybrid only | Battery charging power (alternative to combined Battery Power) |
 | Battery Discharge Power | Hybrid only | Battery discharging power (alternative to combined Battery Power) |
 | Battery Capacity | Hybrid only | Battery total capacity in kWh |
+
+> **Units:** All power sensors can report in **W** or **kW** — the integration reads the sensor's `unit_of_measurement` attribute and converts automatically. No manual conversion needed.
 
 You need **at least one** of: `PV Power + Load Power`, `PV Power + Grid Export`, or `Import/Export Power`.
 
@@ -121,4 +123,4 @@ You may have the import and export sensors swapped, or need to invert one. Use a
 For hybrid inverters, ensure Battery Power uses a consistent sign convention (positive = charging, negative = discharging is common but not universal -- check your inverter docs).
 
 **Separate charge/discharge sensors**
-If your inverter exposes separate sensors for charging and discharging power instead of a combined sensor, use the **Battery Charge Power** and **Battery Discharge Power** fields instead of the combined **Battery Power** field. Both values should be positive watts.
+If your inverter exposes separate sensors for charging and discharging power instead of a combined sensor, use the **Battery Charge Power** and **Battery Discharge Power** fields instead of the combined **Battery Power** field. Both values should be positive (W or kW).

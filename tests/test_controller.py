@@ -205,6 +205,76 @@ class TestCollectPowerState:
         assert ps.battery_soc is None
         assert ps.battery_power is None
 
+    def test_collect_power_state_kw_sensors_converted_to_watts(self):
+        """Power sensors reporting in kW are converted to watts."""
+        states_map = {
+            "sensor.pv_power": _make_state(
+                "sensor.pv_power", "9.9",
+                attributes={"unit_of_measurement": "kW"},
+            ),
+            "sensor.grid_export": _make_state(
+                "sensor.grid_export", "4.8",
+                attributes={"unit_of_measurement": "kW"},
+            ),
+            "sensor.load_power": _make_state(
+                "sensor.load_power", "5.1",
+                attributes={"unit_of_measurement": "kW"},
+            ),
+            "sensor.battery_power": _make_state(
+                "sensor.battery_power", "0.5",
+                attributes={"unit_of_measurement": "kW"},
+            ),
+        }
+        hass = _make_hass(states_map)
+        config_data = {
+            CONF_PV_POWER: "sensor.pv_power",
+            CONF_GRID_EXPORT: "sensor.grid_export",
+            CONF_LOAD_POWER: "sensor.load_power",
+            CONF_BATTERY_POWER: "sensor.battery_power",
+        }
+        controller = Controller(hass, config_data)
+        ps = controller.collect_power_state()
+
+        assert ps.pv_production == pytest.approx(9900.0)
+        assert ps.grid_export == pytest.approx(4800.0)
+        assert ps.load_power == pytest.approx(5100.0)
+        assert ps.battery_power == pytest.approx(500.0)
+
+    def test_collect_power_state_w_sensors_not_double_converted(self):
+        """Power sensors already in W are not modified."""
+        states_map = {
+            "sensor.pv_power": _make_state(
+                "sensor.pv_power", "5000.0",
+                attributes={"unit_of_measurement": "W"},
+            ),
+            "sensor.grid_export": _make_state(
+                "sensor.grid_export", "1200.0",
+                attributes={"unit_of_measurement": "W"},
+            ),
+        }
+        hass = _make_hass(states_map)
+        config_data = {
+            CONF_PV_POWER: "sensor.pv_power",
+            CONF_GRID_EXPORT: "sensor.grid_export",
+        }
+        controller = Controller(hass, config_data)
+        ps = controller.collect_power_state()
+
+        assert ps.pv_production == 5000.0
+        assert ps.grid_export == 1200.0
+
+    def test_collect_power_state_no_unit_attribute_assumes_watts(self):
+        """Sensors without unit_of_measurement attribute are treated as watts."""
+        states_map = {
+            "sensor.pv_power": _make_state("sensor.pv_power", "5000.0"),
+        }
+        hass = _make_hass(states_map)
+        config_data = {CONF_PV_POWER: "sensor.pv_power"}
+        controller = Controller(hass, config_data)
+        ps = controller.collect_power_state()
+
+        assert ps.pv_production == 5000.0
+
 
 # ---------------------------------------------------------------------------
 # TestCollectApplianceStates
@@ -231,6 +301,27 @@ class TestCollectApplianceStates:
         assert state.is_on is True
         assert state.current_power == 1800.0
         assert state.runtime_today == timedelta(hours=1, minutes=30)
+
+    def test_collect_appliance_states_actual_power_kw_converted(self):
+        """Appliance actual_power_entity in kW is converted to watts."""
+        states_map = {
+            "switch.tesla_charge": _make_state("switch.tesla_charge", "on"),
+            "sensor.twc_total_power": _make_state(
+                "sensor.twc_total_power", "5.07",
+                attributes={"unit_of_measurement": "kW"},
+            ),
+        }
+        hass = _make_hass(states_map)
+        controller = Controller(hass, {})
+        configs = [_make_appliance_config(
+            id="tesla",
+            entity_id="switch.tesla_charge",
+            actual_power_entity="sensor.twc_total_power",
+        )]
+        result = controller.collect_appliance_states(configs, {})
+
+        state = result[0]
+        assert state.current_power == pytest.approx(5070.0)
 
     def test_collect_appliance_states_off(self):
         """Reads off state."""

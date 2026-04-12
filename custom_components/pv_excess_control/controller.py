@@ -36,6 +36,20 @@ _LOGGER = logging.getLogger(__name__)
 
 _UNAVAILABLE_STATES = {"unavailable", "unknown", "none", ""}
 
+# Multipliers to normalise power values to watts.
+_POWER_UNIT_MULTIPLIERS: dict[str, float] = {
+    "w": 1.0,
+    "kw": 1000.0,
+    "mw": 1_000_000.0,
+}
+
+
+def _normalise_power(value: float, unit: str | None) -> float:
+    """Convert a power reading to watts based on its unit_of_measurement."""
+    if unit is None:
+        return value
+    return value * _POWER_UNIT_MULTIPLIERS.get(unit.lower().strip(), 1.0)
+
 
 class Controller:
     """Bridges Home Assistant state with the optimizer."""
@@ -49,29 +63,47 @@ class Controller:
     # Sensor reading helpers
     # ------------------------------------------------------------------
 
-    def _read_sensor(self, entity_id: str | None, default: float = 0.0) -> float:
-        """Read a numeric sensor value, returning default if unavailable."""
-        if not entity_id:
-            return default
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in _UNAVAILABLE_STATES:
-            return default
-        try:
-            return float(state.state)
-        except (ValueError, TypeError):
-            return default
+    def _read_sensor(
+        self, entity_id: str | None, default: float = 0.0, *, power: bool = False,
+    ) -> float:
+        """Read a numeric sensor value, returning default if unavailable.
 
-    def _read_sensor_optional(self, entity_id: str | None) -> float | None:
-        """Read a numeric sensor value, returning None if unavailable."""
+        When *power* is True the value is normalised to watts using the
+        sensor's ``unit_of_measurement`` attribute (kW → W, MW → W).
+        """
+        if not entity_id:
+            return default
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in _UNAVAILABLE_STATES:
+            return default
+        try:
+            val = float(state.state)
+        except (ValueError, TypeError):
+            return default
+        if power:
+            val = _normalise_power(val, state.attributes.get("unit_of_measurement"))
+        return val
+
+    def _read_sensor_optional(
+        self, entity_id: str | None, *, power: bool = False,
+    ) -> float | None:
+        """Read a numeric sensor value, returning None if unavailable.
+
+        When *power* is True the value is normalised to watts using the
+        sensor's ``unit_of_measurement`` attribute (kW → W, MW → W).
+        """
         if not entity_id:
             return None
         state = self.hass.states.get(entity_id)
         if state is None or state.state in _UNAVAILABLE_STATES:
             return None
         try:
-            return float(state.state)
+            val = float(state.state)
         except (ValueError, TypeError):
             return None
+        if power:
+            val = _normalise_power(val, state.attributes.get("unit_of_measurement"))
+        return val
 
     def _read_binary(self, entity_id: str | None) -> bool | None:
         """Read a binary sensor, returns True/False/None."""
@@ -90,7 +122,7 @@ class Controller:
         """Read sensor entities and build PowerState."""
         data = self.config_data
 
-        pv_production = self._read_sensor(data.get(CONF_PV_POWER))
+        pv_production = self._read_sensor(data.get(CONF_PV_POWER), power=True)
 
         # Grid export/import: either separate entity or combined
         grid_export = 0.0
@@ -100,16 +132,18 @@ class Controller:
 
         if import_export_entity:
             # Combined sensor: positive = export, negative = import
-            combined = self._read_sensor(import_export_entity)
+            combined = self._read_sensor(import_export_entity, power=True)
             grid_export = max(combined, 0.0)
             grid_import = abs(min(combined, 0.0))
         elif grid_export_entity:
-            grid_export = self._read_sensor(grid_export_entity)
+            grid_export = self._read_sensor(grid_export_entity, power=True)
 
-        load_power = self._read_sensor(data.get(CONF_LOAD_POWER))
+        load_power = self._read_sensor(data.get(CONF_LOAD_POWER), power=True)
 
         battery_soc = self._read_sensor_optional(data.get(CONF_BATTERY_SOC))
-        battery_power = self._read_sensor_optional(data.get(CONF_BATTERY_POWER))
+        battery_power = self._read_sensor_optional(
+            data.get(CONF_BATTERY_POWER), power=True,
+        )
 
         # Calculate excess: PV production minus load; if no load sensor, use grid export
         if load_power > 0:
@@ -150,7 +184,9 @@ class Controller:
             # Read actual power if available
             current_power = 0.0
             if config.actual_power_entity:
-                current_power = self._read_sensor(config.actual_power_entity)
+                current_power = self._read_sensor(
+                    config.actual_power_entity, power=True,
+                )
 
             # Read current amperage if available
             current_amperage: float | None = None

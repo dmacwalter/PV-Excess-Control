@@ -21,7 +21,7 @@ The appliance will appear as a device in Home Assistant with its own switch, sen
 | **Switch Entity** | The `switch` or `input_boolean` that turns the appliance on/off |
 | **Priority** | 1 = highest priority, 1000 = lowest. Lower priority appliances turn on first when excess is available and shed first when excess drops. |
 | **Nominal Power** | Expected wattage when running (used for planning and excess calculation) |
-| **Actual Power Sensor** | Optional: a power sensor for real-time consumption tracking |
+| **Actual Power Sensor** | Optional: a power sensor for real-time consumption tracking (W or kW — automatically converted) |
 | **Phases** | 1 or 3 — used to convert amps to watts for dynamic current |
 
 ---

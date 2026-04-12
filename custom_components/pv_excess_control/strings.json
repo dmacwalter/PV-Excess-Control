@@ -28,14 +28,14 @@
           "battery_capacity": "Battery Capacity (kWh)"
         },
         "data_description": {
-          "pv_power": "Sensor that reports your current PV production in watts.",
-          "grid_export": "Sensor that reports power exported to the grid in watts.",
-          "import_export_power": "Combined sensor where positive = export, negative = import (in watts). Use this instead of Grid Export if your inverter provides a combined sensor.",
-          "load_power": "Sensor that reports your total household load in watts.",
+          "pv_power": "Sensor that reports your current PV production (W or kW — automatically converted).",
+          "grid_export": "Sensor that reports power exported to the grid (W or kW — automatically converted).",
+          "import_export_power": "Combined sensor where positive = export, negative = import (W or kW — automatically converted). Use this instead of Grid Export if your inverter provides a combined sensor.",
+          "load_power": "Sensor that reports your total household load (W or kW — automatically converted).",
           "battery_soc": "Sensor that reports battery state of charge in percent.",
-          "battery_power": "Combined sensor where positive = charging, negative = discharging (in watts). Use this OR the separate charge/discharge sensors below.",
-          "battery_charge_power": "Sensor that reports battery charging power in watts. Use with Battery Discharge Sensor as an alternative to the combined Battery Power Sensor.",
-          "battery_discharge_power": "Sensor that reports battery discharging power in watts. Use with Battery Charge Sensor as an alternative to the combined Battery Power Sensor.",
+          "battery_power": "Combined sensor where positive = charging, negative = discharging (W or kW — automatically converted). Use this OR the separate charge/discharge sensors below.",
+          "battery_charge_power": "Sensor that reports battery charging power (W or kW — automatically converted). Use with Battery Discharge Sensor as an alternative to the combined Battery Power Sensor.",
+          "battery_discharge_power": "Sensor that reports battery discharging power (W or kW — automatically converted). Use with Battery Charge Sensor as an alternative to the combined Battery Power Sensor.",
           "battery_capacity": "Total usable battery capacity in kilowatt-hours."
         }
       },
@@ -126,7 +126,7 @@
     },
     "error": {
       "invalid_voltage": "Grid voltage must be between 100V and 500V.",
-      "no_grid_sensor": "You must configure either a Grid Export sensor or a Combined Import/Export sensor.",
+      "no_grid_sensor": "You must configure at least one of: Grid Export sensor, Combined Import/Export sensor, or Load Power sensor.",
       "missing_price_sensor": "A price sensor is required when a tariff provider is selected.",
       "missing_forecast_sensor": "A forecast sensor is required when a forecast provider is selected.",
       "invalid_soc": "State of charge must be between 0% and 100%."
@@ -156,7 +156,7 @@
             "appliance_entity": "The switch or controllable entity for this appliance.",
             "appliance_priority": "Lower number = higher priority. Appliances with higher priority get excess power first.",
             "nominal_power": "The rated power consumption of this appliance in watts.",
-            "actual_power_entity": "Optional sensor that reports actual power consumption.",
+            "actual_power_entity": "Optional sensor that reports actual power consumption (W or kW — automatically converted).",
             "phases": "Number of electrical phases this appliance uses."
           }
         },
@@ -242,7 +242,7 @@
             "appliance_entity": "The switch or controllable entity for this appliance.",
             "appliance_priority": "Lower number = higher priority. Appliances with higher priority get excess power first.",
             "nominal_power": "The rated power consumption of this appliance in watts.",
-            "actual_power_entity": "Optional sensor that reports actual power consumption.",
+            "actual_power_entity": "Optional sensor that reports actual power consumption (W or kW — automatically converted).",
             "phases": "Number of electrical phases this appliance uses."
           }
         },
@@ -360,14 +360,14 @@
           "battery_capacity": "Battery Capacity (kWh)"
         },
         "data_description": {
-          "pv_power": "Sensor that reports your current PV production in watts.",
-          "grid_export": "Sensor that reports power exported to the grid in watts.",
-          "import_export_power": "Combined sensor where positive = export, negative = import (in watts). Use this instead of Grid Export if your inverter provides a combined sensor.",
-          "load_power": "Sensor that reports your total household load in watts.",
+          "pv_power": "Sensor that reports your current PV production (W or kW — automatically converted).",
+          "grid_export": "Sensor that reports power exported to the grid (W or kW — automatically converted).",
+          "import_export_power": "Combined sensor where positive = export, negative = import (W or kW — automatically converted). Use this instead of Grid Export if your inverter provides a combined sensor.",
+          "load_power": "Sensor that reports your total household load (W or kW — automatically converted).",
           "battery_soc": "Sensor that reports battery state of charge in percent.",
-          "battery_power": "Combined sensor where positive = charging, negative = discharging (in watts). Use this OR the separate charge/discharge sensors below.",
-          "battery_charge_power": "Sensor that reports battery charging power in watts. Use with Battery Discharge Sensor as an alternative to the combined Battery Power Sensor.",
-          "battery_discharge_power": "Sensor that reports battery discharging power in watts. Use with Battery Charge Sensor as an alternative to the combined Battery Power Sensor.",
+          "battery_power": "Combined sensor where positive = charging, negative = discharging (W or kW — automatically converted). Use this OR the separate charge/discharge sensors below.",
+          "battery_charge_power": "Sensor that reports battery charging power (W or kW — automatically converted). Use with Battery Discharge Sensor as an alternative to the combined Battery Power Sensor.",
+          "battery_discharge_power": "Sensor that reports battery discharging power (W or kW — automatically converted). Use with Battery Charge Sensor as an alternative to the combined Battery Power Sensor.",
           "battery_capacity": "Total usable battery capacity in kilowatt-hours."
         }
       },
@@ -458,7 +458,7 @@
     },
     "error": {
       "invalid_voltage": "Grid voltage must be between 100V and 500V.",
-      "no_grid_sensor": "You must configure either a Grid Export sensor or a Combined Import/Export sensor.",
+      "no_grid_sensor": "You must configure at least one of: Grid Export sensor, Combined Import/Export sensor, or Load Power sensor.",
       "missing_price_sensor": "A price sensor is required when a tariff provider is selected.",
       "missing_forecast_sensor": "A forecast sensor is required when a forecast provider is selected.",
       "invalid_soc": "State of charge must be between 0% and 100%."
