@@ -125,6 +125,7 @@ from .planner import Planner
 
 _LOGGER = logging.getLogger(__name__)
 
+_OFF_STATES = {"off", "false", "False", "0"}
 _UNAVAILABLE_STATES = {STATE_UNAVAILABLE, STATE_UNKNOWN, "none", ""}
 
 # Maximum number of power history entries to keep (~30 min at 30s intervals)
@@ -969,7 +970,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             entity_state = self.hass.states.get(config.entity_id)
             is_on = False
             if entity_state is not None:
-                is_on = entity_state.state in ("on", "true", "True", "1")
+                is_on = entity_state.state not in _OFF_STATES and entity_state.state not in _UNAVAILABLE_STATES
 
             # Detect off→on physical transition (Bug A from 2026-04-09
             # incident spec). activations_today is incremented based on
@@ -1056,7 +1057,8 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 entity_state = self.hass.states.get(entity_id) if entity_id else None
                 is_on = (
                     entity_state is not None
-                    and entity_state.state in ("on", "true", "True", "1")
+                    and entity_state.state not in _OFF_STATES
+                    and entity_state.state not in _UNAVAILABLE_STATES
                 )
 
                 # Refresh current_power from the actual power sensor
@@ -1259,7 +1261,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
 
             # Check if state actually needs to change
-            is_on = current_state.state in ("on", "true", "True", "1")
+            is_on = current_state.state not in _OFF_STATES and current_state.state not in _UNAVAILABLE_STATES
             if decision.action == Action.ON and is_on:
                 _LOGGER.debug(
                     "Skipping %s for %s (%s): already on",
@@ -1544,7 +1546,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             current_state = self.hass.states.get(entity_id)
             if current_state is None:
                 continue
-            if current_state.state not in ("on", "true", "True", "1"):
+            if current_state.state in _OFF_STATES or current_state.state in _UNAVAILABLE_STATES:
                 continue
             domain = entity_id.split(".")[0] if "." in entity_id else "switch"
             name = subentry.data.get(CONF_APPLIANCE_NAME, subentry_id)

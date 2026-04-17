@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+_OFF_STATES = {"off", "false", "False", "0"}
 _UNAVAILABLE_STATES = {"unavailable", "unknown", "none", ""}
 
 # Multipliers to normalise power values to watts.
@@ -179,7 +180,7 @@ class Controller:
             entity_state = self.hass.states.get(config.entity_id)
             is_on = False
             if entity_state is not None:
-                is_on = entity_state.state in ("on", "true", "True", "1")
+                is_on = entity_state.state not in _OFF_STATES and entity_state.state not in _UNAVAILABLE_STATES
 
             # Read actual power if available
             current_power = 0.0
@@ -250,7 +251,7 @@ class Controller:
             current_state = self.hass.states.get(config.entity_id)
             if not self._needs_change(decision, current_state, config):
                 entity_state = getattr(current_state, "state", None) if current_state else None
-                is_on = entity_state in ("on", "true", "True", "1") if entity_state else False
+                is_on = (entity_state not in _OFF_STATES and entity_state not in _UNAVAILABLE_STATES) if entity_state else False
                 _LOGGER.debug(
                     "Skip %s: already %s",
                     config.name, "on" if is_on else "off",
@@ -359,11 +360,11 @@ class Controller:
 
         if decision.action == Action.ON:
             # Already on - no change needed
-            if entity_state in ("on", "true", "True", "1"):
+            if entity_state not in _OFF_STATES and entity_state not in _UNAVAILABLE_STATES:
                 return False
         elif decision.action == Action.OFF:
             # Already off - no change needed
-            if entity_state in ("off", "false", "False", "0"):
+            if entity_state in _OFF_STATES:
                 return False
             # on_only prevents turning off
             if config.on_only:
