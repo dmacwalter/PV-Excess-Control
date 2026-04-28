@@ -1183,3 +1183,69 @@ class TestDataAccumulation:
         """Flow starts with empty data dict."""
         flow = _make_flow()
         assert flow.data == {}
+
+
+# ---------------------------------------------------------------------------
+# Tests for _validate_battery_section
+# ---------------------------------------------------------------------------
+
+from custom_components.pv_excess_control.const import (
+    CONF_AUTO_BATTERY_GRID_CHARGE,
+    CONF_BATTERY_GRID_CHARGE_POWER_W,
+    CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY,
+    CONF_INVERTER_FORCE_CHARGE_ENABLE_ENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_ENABLE_DISENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_MODE_ENTITY,
+    CONF_INVERTER_FORCE_CHARGE_MODE_ENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_MODE_DISENGAGE_VALUE,
+)
+
+
+def test_auto_battery_grid_charge_requires_enable_entity_and_power_w():
+    from custom_components.pv_excess_control.config_flow import _validate_battery_section
+    bad = {
+        CONF_AUTO_BATTERY_GRID_CHARGE: True,
+        # missing CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY
+        CONF_BATTERY_GRID_CHARGE_POWER_W: 5000.0,
+    }
+    with pytest.raises(vol.Invalid):
+        _validate_battery_section(bad)
+
+
+def test_inverter_force_charge_engage_value_required_when_entity_set():
+    from custom_components.pv_excess_control.config_flow import _validate_battery_section
+    bad = {
+        CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY: "input_select.cmd",
+        # missing engage/disengage values
+    }
+    with pytest.raises(vol.Invalid):
+        _validate_battery_section(bad)
+
+
+def test_inverter_force_charge_mode_values_required_when_mode_entity_set():
+    from custom_components.pv_excess_control.config_flow import _validate_battery_section
+    bad = {
+        CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY: "input_select.cmd",
+        CONF_INVERTER_FORCE_CHARGE_ENABLE_ENGAGE_VALUE: "Forced charge",
+        CONF_INVERTER_FORCE_CHARGE_ENABLE_DISENGAGE_VALUE: "Stop",
+        CONF_INVERTER_FORCE_CHARGE_MODE_ENTITY: "input_select.mode",
+        # missing mode engage/disengage values
+    }
+    with pytest.raises(vol.Invalid):
+        _validate_battery_section(bad)
+
+
+def test_validate_battery_section_passes_for_complete_three_step_config():
+    from custom_components.pv_excess_control.config_flow import _validate_battery_section
+    good = {
+        CONF_AUTO_BATTERY_GRID_CHARGE: True,
+        CONF_BATTERY_GRID_CHARGE_POWER_W: 5000.0,
+        CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY: "input_select.cmd",
+        CONF_INVERTER_FORCE_CHARGE_ENABLE_ENGAGE_VALUE: "Forced charge",
+        CONF_INVERTER_FORCE_CHARGE_ENABLE_DISENGAGE_VALUE: "Stop",
+        CONF_INVERTER_FORCE_CHARGE_MODE_ENTITY: "input_select.mode",
+        CONF_INVERTER_FORCE_CHARGE_MODE_ENGAGE_VALUE: "Forced",
+        CONF_INVERTER_FORCE_CHARGE_MODE_DISENGAGE_VALUE: "Self",
+    }
+    # Should NOT raise
+    _validate_battery_section(good)

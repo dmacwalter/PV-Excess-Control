@@ -50,6 +50,16 @@ from .const import (
     CONF_ACTUAL_POWER_ENTITY,
     CONF_ALLOW_GRID_CHARGING,
     CONF_ALLOW_GRID_SUPPLEMENT,
+    CONF_AUTO_BATTERY_GRID_CHARGE,
+    CONF_BATTERY_GRID_CHARGE_POWER_W,
+    CONF_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES,
+    CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY,
+    CONF_INVERTER_FORCE_CHARGE_ENABLE_ENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_ENABLE_DISENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_MODE_ENTITY,
+    CONF_INVERTER_FORCE_CHARGE_MODE_ENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_MODE_DISENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_POWER_ENTITY,
     CONF_APPLIANCE_ENTITY,
     CONF_APPLIANCE_NAME,
     CONF_APPLIANCE_PRIORITY,
@@ -66,7 +76,9 @@ from .const import (
     CONF_BATTERY_STRATEGY,
     CONF_BATTERY_TARGET_SOC,
     CONF_BATTERY_TARGET_TIME,
+    CONF_CHEAP_GRID_TARGET_CURRENT,
     CONF_CHEAP_PRICE_THRESHOLD,
+    CONF_COMPLETION_POWER_THRESHOLD,
     CONF_CONTROLLER_INTERVAL,
     CONF_CURRENT_ENTITY,
     CONF_CURRENT_STEP,
@@ -116,6 +128,7 @@ from .const import (
     CONF_SWITCH_INTERVAL,
     CONF_TARIFF_PROVIDER,
     DEFAULT_CONTROLLER_INTERVAL,
+    DEFAULT_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES,
     DEFAULT_GRID_VOLTAGE,
     DEFAULT_OFF_THRESHOLD,
     DEFAULT_PLANNER_INTERVAL,
@@ -310,6 +323,23 @@ def _appliance_current_schema(defaults: dict[str, Any] | None = None) -> vol.Sch
                 )
             ),
             vol.Optional(
+                CONF_CHEAP_GRID_TARGET_CURRENT,
+                description={
+                    "suggested_value": d.get(
+                        CONF_CHEAP_GRID_TARGET_CURRENT,
+                        d.get(CONF_MAX_CURRENT, 16.0),
+                    )
+                },
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=d.get(CONF_MIN_CURRENT, 6.0),
+                    max=d.get(CONF_MAX_CURRENT, 16.0),
+                    step=0.1,
+                    unit_of_measurement="A",
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
                 CONF_EV_SOC_ENTITY,
                 description={"suggested_value": d.get(CONF_EV_SOC_ENTITY)},
             ): SENSOR_ENTITY_SELECTOR,
@@ -421,6 +451,18 @@ def _appliance_constraints_schema(
             )
         ),
         vol.Optional(
+            CONF_COMPLETION_POWER_THRESHOLD,
+            description={"suggested_value": d.get(CONF_COMPLETION_POWER_THRESHOLD)},
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=0,
+                max=10000,
+                step=1,
+                unit_of_measurement="W",
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Optional(
             CONF_SCHEDULE_DEADLINE,
             description={"suggested_value": d.get(CONF_SCHEDULE_DEADLINE)},
         ): TimeSelector(),
@@ -445,6 +487,18 @@ def _appliance_constraints_schema(
                 max=100000,
                 step=1,
                 unit_of_measurement="W",
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Optional(
+            CONF_CHEAP_PRICE_THRESHOLD,
+            description={"suggested_value": d.get(CONF_CHEAP_PRICE_THRESHOLD)},
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=0,
+                max=1000,
+                step=0.01,
+                unit_of_measurement="currency/kWh",
                 mode=NumberSelectorMode.BOX,
             )
         ),
@@ -661,12 +715,104 @@ def _battery_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     mode=NumberSelectorMode.SLIDER,
                 )
             ),
+            vol.Required(
+                CONF_AUTO_BATTERY_GRID_CHARGE,
+                default=d.get(CONF_AUTO_BATTERY_GRID_CHARGE, False),
+            ): BooleanSelector(),
+            vol.Optional(
+                CONF_BATTERY_GRID_CHARGE_POWER_W,
+                description={"suggested_value": d.get(CONF_BATTERY_GRID_CHARGE_POWER_W)},
+            ): NumberSelector(NumberSelectorConfig(
+                min=0, max=20000, step=10, unit_of_measurement="W",
+                mode=NumberSelectorMode.BOX,
+            )),
+            vol.Required(
+                CONF_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES,
+                default=d.get(CONF_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES, DEFAULT_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES),
+            ): NumberSelector(NumberSelectorConfig(
+                min=1, max=60, step=1, unit_of_measurement="min",
+                mode=NumberSelectorMode.BOX,
+            )),
+            vol.Optional(
+                CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY,
+                description={"suggested_value": d.get(CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY)},
+            ): EntitySelector(EntitySelectorConfig(
+                domain=["input_select", "select", "switch", "input_boolean"],
+            )),
+            vol.Optional(
+                CONF_INVERTER_FORCE_CHARGE_ENABLE_ENGAGE_VALUE,
+                description={"suggested_value": d.get(CONF_INVERTER_FORCE_CHARGE_ENABLE_ENGAGE_VALUE)},
+            ): TextSelector(),
+            vol.Optional(
+                CONF_INVERTER_FORCE_CHARGE_ENABLE_DISENGAGE_VALUE,
+                description={"suggested_value": d.get(CONF_INVERTER_FORCE_CHARGE_ENABLE_DISENGAGE_VALUE)},
+            ): TextSelector(),
+            vol.Optional(
+                CONF_INVERTER_FORCE_CHARGE_MODE_ENTITY,
+                description={"suggested_value": d.get(CONF_INVERTER_FORCE_CHARGE_MODE_ENTITY)},
+            ): EntitySelector(EntitySelectorConfig(
+                domain=["input_select", "select", "switch", "input_boolean"],
+            )),
+            vol.Optional(
+                CONF_INVERTER_FORCE_CHARGE_MODE_ENGAGE_VALUE,
+                description={"suggested_value": d.get(CONF_INVERTER_FORCE_CHARGE_MODE_ENGAGE_VALUE)},
+            ): TextSelector(),
+            vol.Optional(
+                CONF_INVERTER_FORCE_CHARGE_MODE_DISENGAGE_VALUE,
+                description={"suggested_value": d.get(CONF_INVERTER_FORCE_CHARGE_MODE_DISENGAGE_VALUE)},
+            ): TextSelector(),
+            vol.Optional(
+                CONF_INVERTER_FORCE_CHARGE_POWER_ENTITY,
+                description={"suggested_value": d.get(CONF_INVERTER_FORCE_CHARGE_POWER_ENTITY)},
+            ): EntitySelector(EntitySelectorConfig(
+                domain=["input_number", "number"],
+            )),
         }
     )
 
 
 # Keep module-level constant for backwards compatibility in tests
 BATTERY_SCHEMA = _battery_schema()
+
+
+def _validate_battery_section(data: dict) -> None:
+    """Validate the battery section's grid-charge wiring. Raises vol.Invalid on bad input."""
+    enable_entity = data.get(CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY)
+    if enable_entity:
+        if not data.get(CONF_INVERTER_FORCE_CHARGE_ENABLE_ENGAGE_VALUE):
+            raise vol.Invalid(
+                "inverter_force_charge_enable_engage_value is required when enable entity is set"
+            )
+        if not data.get(CONF_INVERTER_FORCE_CHARGE_ENABLE_DISENGAGE_VALUE):
+            raise vol.Invalid(
+                "inverter_force_charge_enable_disengage_value is required when enable entity is set"
+            )
+
+    mode_entity = data.get(CONF_INVERTER_FORCE_CHARGE_MODE_ENTITY)
+    if mode_entity:
+        if not data.get(CONF_INVERTER_FORCE_CHARGE_MODE_ENGAGE_VALUE):
+            raise vol.Invalid(
+                "inverter_force_charge_mode_engage_value is required when mode entity is set"
+            )
+        if not data.get(CONF_INVERTER_FORCE_CHARGE_MODE_DISENGAGE_VALUE):
+            raise vol.Invalid(
+                "inverter_force_charge_mode_disengage_value is required when mode entity is set"
+            )
+
+    if data.get(CONF_AUTO_BATTERY_GRID_CHARGE, False):
+        if not enable_entity:
+            raise vol.Invalid(
+                "auto_battery_grid_charge=true requires inverter_force_charge_enable_entity"
+            )
+        if data.get(CONF_BATTERY_GRID_CHARGE_POWER_W) is None:
+            raise vol.Invalid(
+                "auto_battery_grid_charge=true requires battery_grid_charge_power_w"
+            )
+
+    pw = data.get(CONF_BATTERY_GRID_CHARGE_POWER_W)
+    if pw is not None and pw < 0:
+        raise vol.Invalid("battery_grid_charge_power_w must be >= 0")
+
 
 def _settings_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     """Build the global settings schema."""
@@ -954,6 +1100,12 @@ class PvExcessControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors[CONF_BATTERY_TARGET_SOC] = "invalid_soc"
 
             if not errors:
+                try:
+                    _validate_battery_section(user_input)
+                except vol.Invalid as exc:
+                    errors["base"] = str(exc)
+
+            if not errors:
                 self.data.update(user_input)
                 return await self.async_step_settings()
 
@@ -1197,6 +1349,13 @@ class PvExcessControlOptionsFlow(config_entries.OptionsFlow):
             target_soc = user_input.get(CONF_BATTERY_TARGET_SOC, 80)
             if not (0 <= target_soc <= 100):
                 errors[CONF_BATTERY_TARGET_SOC] = "invalid_soc"
+
+            if not errors:
+                try:
+                    _validate_battery_section(user_input)
+                except vol.Invalid as exc:
+                    errors["base"] = str(exc)
+
             if not errors:
                 self.data.update(user_input)
                 # Clean optional battery fields not present in user_input
@@ -1364,11 +1523,14 @@ class ApplianceSubentryFlowHandler(_SubentryBase):  # type: ignore[misc]
                 if min_c >= max_c:
                     errors[CONF_MIN_CURRENT] = "invalid_current_range"
 
+            if not dynamic and user_input.get(CONF_CHEAP_GRID_TARGET_CURRENT) is not None:
+                errors[CONF_CHEAP_GRID_TARGET_CURRENT] = "cheap_grid_target_current_requires_dynamic"
+
             if not errors:
                 self._data.update(user_input)
                 # Clean optional current/EV keys not present in user_input
                 for key in [CONF_CURRENT_ENTITY, CONF_EV_SOC_ENTITY, CONF_EV_CONNECTED_ENTITY,
-                            CONF_EV_TARGET_SOC]:
+                            CONF_EV_TARGET_SOC, CONF_CHEAP_GRID_TARGET_CURRENT]:
                     if key not in user_input:
                         self._data.pop(key, None)
                 return await self.async_step_constraints()
@@ -1450,7 +1612,7 @@ class ApplianceSubentryFlowHandler(_SubentryBase):  # type: ignore[misc]
                             CONF_START_AFTER, CONF_END_BEFORE,
                             CONF_MAX_GRID_POWER, CONF_BATTERY_DISCHARGE_OVERRIDE,
                             CONF_AVERAGING_WINDOW, CONF_REQUIRES_APPLIANCE,
-                            CONF_ON_THRESHOLD]:
+                            CONF_ON_THRESHOLD, CONF_COMPLETION_POWER_THRESHOLD]:
                     if key not in user_input:
                         self._data.pop(key, None)
                 title = self._data.get(CONF_APPLIANCE_NAME, "Appliance")
@@ -1545,11 +1707,14 @@ class ApplianceSubentryFlowHandler(_SubentryBase):  # type: ignore[misc]
                 if min_c >= max_c:
                     errors[CONF_MIN_CURRENT] = "invalid_current_range"
 
+            if not dynamic and user_input.get(CONF_CHEAP_GRID_TARGET_CURRENT) is not None:
+                errors[CONF_CHEAP_GRID_TARGET_CURRENT] = "cheap_grid_target_current_requires_dynamic"
+
             if not errors:
                 self._data.update(user_input)
                 # Clean optional current/EV keys not present in user_input
                 for key in [CONF_CURRENT_ENTITY, CONF_EV_SOC_ENTITY, CONF_EV_CONNECTED_ENTITY,
-                            CONF_EV_TARGET_SOC]:
+                            CONF_EV_TARGET_SOC, CONF_CHEAP_GRID_TARGET_CURRENT]:
                     if key not in user_input:
                         self._data.pop(key, None)
                 return await self.async_step_reconfigure_constraints()
@@ -1627,7 +1792,7 @@ class ApplianceSubentryFlowHandler(_SubentryBase):  # type: ignore[misc]
                             CONF_START_AFTER, CONF_END_BEFORE,
                             CONF_MAX_GRID_POWER, CONF_BATTERY_DISCHARGE_OVERRIDE,
                             CONF_AVERAGING_WINDOW, CONF_REQUIRES_APPLIANCE,
-                            CONF_ON_THRESHOLD]:
+                            CONF_ON_THRESHOLD, CONF_COMPLETION_POWER_THRESHOLD]:
                     if key not in user_input:
                         self._data.pop(key, None)
                 title = self._data.get(CONF_APPLIANCE_NAME, "Appliance")

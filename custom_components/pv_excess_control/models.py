@@ -83,6 +83,7 @@ class ApplianceConfig:
     max_grid_power: float | None
 
     # Fields with defaults (must come after non-default fields)
+    cheap_price_threshold: float | None = None  # Per-appliance cheap threshold; None = use global
     ev_target_soc: float | None = None
     start_after: time | None = None
     end_before: time | None = None
@@ -103,6 +104,15 @@ class ApplianceConfig:
 
     # Per-appliance activation buffer in watts (None = use type-dependent default)
     on_threshold: int | None = None
+
+    # Completion power threshold: power below which runtime stops counting (None = disabled)
+    completion_power_threshold: float | None = None
+
+    # Cheap-window target current for dynamic-current appliances.
+    # When set and a cheap tariff window is active and allow_grid_supplement is True,
+    # the optimizer drives the appliance to this amperage instead of the conservative
+    # min_current. Capped by max_grid_power and max_current.
+    cheap_grid_target_current: float | None = None
 
 
 @dataclass
@@ -227,3 +237,23 @@ class OptimizerResult:
     """Complete output of the optimizer for a single cycle."""
     decisions: list[ControlDecision]
     battery_discharge_action: BatteryDischargeAction
+
+
+@dataclass(frozen=True)
+class InverterGridChargeConfig:
+    """Maps generic engage/disengage to inverter-specific entity writes.
+
+    Patterns supported:
+    - Single switch / input_boolean (only enable_entity_id; engage/disengage values "on"/"off").
+    - Two-step: select-mode + select-command (mode_entity_id + enable_entity_id, no power).
+    - Three-step (e.g. Sungrow mkaiser): select-mode + select-command + number-power.
+    """
+    enable_entity_id: str
+    enable_engage_value: str
+    enable_disengage_value: str
+
+    mode_entity_id: str | None = None
+    mode_engage_value: str | None = None
+    mode_disengage_value: str | None = None
+
+    power_entity_id: str | None = None

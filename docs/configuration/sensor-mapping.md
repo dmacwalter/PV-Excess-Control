@@ -98,6 +98,8 @@ Different inverters use different sign conventions for grid power. The integrati
 - **Export positive**: Grid Export Power sensor, value is positive when exporting
 - **Export positive, import negative**: Import/Export Power sensor (set this field instead)
 
+> **Migrating from the blueprint?** The original PV Excess Control blueprint used the opposite convention for the combined sensor (*positive = import, negative = export*). The new integration uses **positive = export, negative = import** for Import/Export. If your excess power looks inverted after migration, either negate the sensor with the template below or use the separate **Grid Export Power** field instead.
+
 If your sensor uses the opposite convention (export negative on the export sensor), create a template sensor to invert it:
 
 ```yaml

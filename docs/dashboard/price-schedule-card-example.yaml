@@ -1,0 +1,397 @@
+# ============================================================================
+# PV Excess Control — Energy Price & Schedule Cards (Example Setup)
+# ============================================================================
+#
+# Two apexcharts-card cards showing electricity prices as columns overlaid
+# with scheduled appliance activity as color-coded step-lines.
+#
+# This file is configured for a specific setup:
+#   - Price sensor: Octopus Energy (sensor.octopus_a_e0731951_electricity_price)
+#   - Appliances: Kona, Poolpumpe, Pool Wärmepumpe, Pool Chlorgenerator
+#
+# For a generic template, see price-schedule-card-template.yaml
+#
+# Prerequisites:
+#   - apexcharts-card installed via HACS (Frontend)
+#   - PV Excess Control integration with planner enabled
+#   - A tariff provider configured (prices exposed in sensor attributes)
+#
+# ============================================================================
+
+# ---------- TODAY ----------
+
+- type: custom:apexcharts-card
+  graph_span: 1d
+  header:
+    show: true
+    title: Energy Price & Schedule (Today)
+  span:
+    start: day
+  now:
+    show: true
+    label: Now
+  series:
+    # ── Electricity price columns ──────────────────────────────────────────
+    - entity: sensor.octopus_a_e0731951_electricity_price
+      name: Price
+      type: column
+      yaxis_id: price
+      float_precision: 4
+      data_generator: |
+        const rates = entity.attributes.rates || [];
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(today);
+        todayEnd.setDate(todayEnd.getDate() + 1);
+        return rates
+          .filter(r => {
+            const s = new Date(r.start);
+            return s >= today && s < todayEnd;
+          })
+          .map(r => [new Date(r.start).getTime(), r.value_inc_vat]);
+
+    # ── Kona (EV Charger) ─────────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: Kona
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#FF5733'
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'Kona';
+        const h = 0.8;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const ms = today.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+    # ── Poolpumpe ─────────────────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: Poolpumpe
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#33C4FF'
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'Poolpumpe';
+        const h = 0.6;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const ms = today.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+    # ── Pool Wärmepumpe ───────────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: Pool Wärmepumpe
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#33FF57'
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'Pool Wärmepumpe';
+        const h = 0.4;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const ms = today.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+    # ── Pool Chlorgenerator ───────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: Pool Chlorgenerator
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#C433FF'
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'Pool Chlorgenerator';
+        const h = 0.2;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const ms = today.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+  apex_config:
+    plotOptions:
+      bar:
+        columnWidth: 70%
+    xaxis:
+      type: datetime
+      tickAmount: 12
+      labels:
+        datetimeUTC: false
+    tooltip:
+      shared: false
+    legend:
+      show: true
+      position: bottom
+  yaxis:
+    - id: price
+      min: 0
+      apex_config:
+        title:
+          text: €/kWh
+        forceNiceScale: true
+    - id: schedules
+      show: false
+      opposite: true
+      max: 1
+      min: 0
+
+
+# ---------- TOMORROW ----------
+
+- type: custom:apexcharts-card
+  graph_span: 1d
+  header:
+    show: true
+    title: Energy Price & Schedule (Tomorrow)
+  span:
+    start: day
+    offset: +1d
+  series:
+    # ── Electricity price columns ──────────────────────────────────────────
+    - entity: sensor.octopus_a_e0731951_electricity_price
+      name: Price
+      type: column
+      yaxis_id: price
+      float_precision: 4
+      data_generator: |
+        const rates = entity.attributes.rates || [];
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        const tomorrowEnd = new Date(tomorrow);
+        tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
+        return rates
+          .filter(r => {
+            const s = new Date(r.start);
+            return s >= tomorrow && s < tomorrowEnd;
+          })
+          .map(r => [new Date(r.start).getTime(), r.value_inc_vat]);
+
+    # ── Kona (EV Charger) ─────────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: Kona
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#FF5733'
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'Kona';
+        const h = 0.8;
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        const ms = tomorrow.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+    # ── Poolpumpe ─────────────────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: Poolpumpe
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#33C4FF'
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'Poolpumpe';
+        const h = 0.6;
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        const ms = tomorrow.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+    # ── Pool Wärmepumpe ───────────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: Pool Wärmepumpe
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#33FF57'
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'Pool Wärmepumpe';
+        const h = 0.4;
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        const ms = tomorrow.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+    # ── Pool Chlorgenerator ───────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: Pool Chlorgenerator
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#C433FF'
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'Pool Chlorgenerator';
+        const h = 0.2;
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        const ms = tomorrow.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+  apex_config:
+    plotOptions:
+      bar:
+        columnWidth: 70%
+    xaxis:
+      type: datetime
+      tickAmount: 12
+      labels:
+        datetimeUTC: false
+    tooltip:
+      shared: false
+    legend:
+      show: true
+      position: bottom
+  yaxis:
+    - id: price
+      min: 0
+      apex_config:
+        title:
+          text: €/kWh
+        forceNiceScale: true
+    - id: schedules
+      show: false
+      opposite: true
+      max: 1
+      min: 0

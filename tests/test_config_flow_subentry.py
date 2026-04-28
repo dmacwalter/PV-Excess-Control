@@ -1088,3 +1088,52 @@ class TestEdgeCases:
             user_input=dict(VALID_CONSTRAINTS_INPUT)
         )
         assert result["title"] == "Solar Water Heater"
+
+
+# ---------------------------------------------------------------------------
+# Tests: cheap_grid_target_current field
+# ---------------------------------------------------------------------------
+
+
+class TestCheapGridTargetCurrent:
+    """Tests for the cheap_grid_target_current field on the dynamic-current step."""
+
+    @pytest.mark.asyncio
+    async def test_cheap_grid_target_current_accepted_for_dynamic_appliance(self):
+        """A dynamic-current appliance subentry accepts cheap_grid_target_current."""
+        from custom_components.pv_excess_control.const import CONF_CHEAP_GRID_TARGET_CURRENT
+
+        flow = _make_subentry_flow()
+        flow._data = dict(VALID_BASIC_INPUT)
+
+        # Submit the current step with dynamic current enabled and cheap_grid_target_current set
+        current_input = dict(VALID_CURRENT_INPUT_ENABLED)
+        current_input[CONF_CHEAP_GRID_TARGET_CURRENT] = 14.0
+
+        result = await flow.async_step_current(user_input=current_input)
+
+        # Should advance past the current step without errors
+        assert result["type"] == "form"
+        assert result["step_id"] == "constraints"
+        assert flow._data[CONF_CHEAP_GRID_TARGET_CURRENT] == 14.0
+
+    @pytest.mark.asyncio
+    async def test_cheap_grid_target_current_rejected_for_non_dynamic_appliance(self):
+        """Setting cheap_grid_target_current on a non-dynamic appliance fails validation."""
+        from custom_components.pv_excess_control.const import CONF_CHEAP_GRID_TARGET_CURRENT
+
+        flow = _make_subentry_flow()
+        flow._data = dict(VALID_BASIC_INPUT)
+
+        # Submit the current step with dynamic current disabled but cheap_grid_target_current set
+        result = await flow.async_step_current(
+            user_input={
+                CONF_DYNAMIC_CURRENT: False,
+                CONF_CHEAP_GRID_TARGET_CURRENT: 14.0,
+            }
+        )
+
+        # Should be rejected with a form error
+        assert result["type"] == "form"
+        assert result["step_id"] == "current"
+        assert CONF_CHEAP_GRID_TARGET_CURRENT in result["errors"]

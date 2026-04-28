@@ -612,6 +612,7 @@ def _make_appliance(
     max_current: float = 16.0,
     phases: int = 1,
     on_only: bool = False,
+    cheap_price_threshold: float | None = None,
 ) -> ApplianceConfig:
     """Create an ApplianceConfig with sensible defaults."""
     return ApplianceConfig(
@@ -637,6 +638,7 @@ def _make_appliance(
         switch_interval=300,
         allow_grid_supplement=allow_grid_supplement,
         max_grid_power=max_grid_power,
+        cheap_price_threshold=cheap_price_threshold,
     )
 
 
@@ -644,6 +646,7 @@ def _make_tariff_info(
     current_price: float = 0.25,
     feed_in_tariff: float = 0.08,
     cheap_threshold: float = 0.10,
+    battery_charge_threshold: float | None = None,
     windows: list[TariffWindow] | None = None,
 ) -> TariffInfo:
     """Create a TariffInfo with sensible defaults."""
@@ -651,7 +654,7 @@ def _make_tariff_info(
         current_price=current_price,
         feed_in_tariff=feed_in_tariff,
         cheap_price_threshold=cheap_threshold,
-        battery_charge_price_threshold=cheap_threshold,
+        battery_charge_price_threshold=battery_charge_threshold if battery_charge_threshold is not None else cheap_threshold,
         windows=windows or [],
     )
 
@@ -1114,3 +1117,152 @@ class TestCreatePlan:
         assert len(plan.entries) >= 1
         assert plan.entries[0].reason == PlanReason.EXCESS_AVAILABLE
         assert 0.0 <= plan.confidence <= 1.0
+
+
+# ===========================================================================
+# TestBatteryChargeThreshold
+# ===========================================================================
+
+class TestBatteryChargeThreshold:
+    """Test that battery grid charging uses battery_charge_price_threshold, not cheap_price_threshold."""
+
+    def test_battery_charges_at_battery_threshold(self):
+        """Battery charges from grid when price <= battery_charge_price_threshold."""
+        # cheap_threshold=0.10, battery_charge_threshold=0.05
+        # Slot price is 0.04 (below battery threshold) -> should charge
+        slots = [
+            TimeSlot(
+                start=_dt(2), end=_dt(3),
+                expected_solar_watts=0.0, expected_excess_watts=0.0,
+                price=0.04, is_cheap=True,
+            ),
+        ]
+        battery_config = _make_battery_config(
+            capacity_kwh=10.0,
+            target_soc=90.0,
+            strategy=BatteryStrategy.BATTERY_FIRST,
+            allow_grid_charging=True,
+        )
+        tariff = _make_tariff_info(
+            cheap_threshold=0.10,
+            battery_charge_threshold=0.05,
+        )
+
+        planner = Planner()
+        alloc = planner.calculate_battery_strategy(
+            slots, battery_config, current_soc=50.0, tariff=tariff,
+        )
+
+        # Should have reserved the slot for grid charging
+        assert len(alloc.slots_reserved) == 1
+
+    def test_battery_rejects_slot_above_battery_threshold(self):
+        """Battery does NOT charge from grid when price > battery_charge_price_threshold,
+        even if price <= cheap_price_threshold (is_cheap=True)."""
+        # cheap_threshold=0.10, battery_charge_threshold=0.05
+        # Slot price is 0.08 (above battery threshold but below cheap threshold)
+        slots = [
+            TimeSlot(
+                start=_dt(2), end=_dt(3),
+                expected_solar_watts=0.0, expected_excess_watts=0.0,
+                price=0.08, is_cheap=True,  # is_cheap=True from global!
+            ),
+        ]
+        battery_config = _make_battery_config(
+            capacity_kwh=10.0,
+            target_soc=90.0,
+            strategy=BatteryStrategy.BATTERY_FIRST,
+            allow_grid_charging=True,
+        )
+        tariff = _make_tariff_info(
+            cheap_threshold=0.10,
+            battery_charge_threshold=0.05,
+        )
+
+        planner = Planner()
+        alloc = planner.calculate_battery_strategy(
+            slots, battery_config, current_soc=50.0, tariff=tariff,
+        )
+
+        # Should NOT have reserved (price above battery threshold)
+        assert len(alloc.slots_reserved) == 0
+
+
+# ===========================================================================
+# TestPlannerPerApplianceThreshold
+# ===========================================================================
+
+class TestPlannerPerApplianceThreshold:
+    """Test that planner Tier 2 scheduling uses per-appliance cheap threshold."""
+
+    def test_per_appliance_threshold_selects_cheap_slots(self):
+        """Appliance with higher per-appliance threshold uses slots the global would reject."""
+        # Global threshold=0.05, per-appliance=0.15
+        # Slot at price 0.10: is_cheap=False (global), but below per-appliance threshold
+        slots = [
+            TimeSlot(
+                start=_dt(1), end=_dt(2),
+                expected_solar_watts=0.0, expected_excess_watts=0.0,
+                price=0.10, is_cheap=False,
+            ),
+        ]
+        appliance = _make_appliance(
+            appliance_id="ev",
+            priority=1,
+            nominal_power=3000.0,
+            min_daily_runtime=timedelta(hours=1),
+            allow_grid_supplement=True,
+            max_grid_power=3000.0,
+            cheap_price_threshold=0.15,
+        )
+        battery_alloc = BatteryAllocation(
+            charging_needed_kwh=0.0,
+            slots_reserved=[],
+            excess_after_battery={0: 0.0},
+        )
+
+        planner = Planner()
+        entries = planner.schedule_appliances(
+            slots, battery_alloc, [appliance], cheap_price_threshold=0.05,
+        )
+
+        # Should schedule in the slot via Tier 2 (per-appliance threshold allows it)
+        assert len(entries) >= 1
+        assert entries[0].appliance_id == "ev"
+        assert entries[0].reason == PlanReason.CHEAP_TARIFF
+
+    def test_none_threshold_uses_global_in_planner(self):
+        """Appliance with no per-appliance threshold falls back to global."""
+        # Global threshold=0.05, slot price=0.10 (above global)
+        slots = [
+            TimeSlot(
+                start=_dt(1), end=_dt(2),
+                expected_solar_watts=0.0, expected_excess_watts=0.0,
+                price=0.10, is_cheap=False,
+            ),
+        ]
+        appliance = _make_appliance(
+            appliance_id="pump",
+            priority=1,
+            nominal_power=1000.0,
+            min_daily_runtime=timedelta(hours=1),
+            allow_grid_supplement=True,
+            max_grid_power=1000.0,
+            cheap_price_threshold=None,
+        )
+        battery_alloc = BatteryAllocation(
+            charging_needed_kwh=0.0,
+            slots_reserved=[],
+            excess_after_battery={0: 0.0},
+        )
+
+        planner = Planner()
+        entries = planner.schedule_appliances(
+            slots, battery_alloc, [appliance], cheap_price_threshold=0.05,
+        )
+
+        # Tier 2 should NOT schedule (price above global threshold, no per-appliance override)
+        # Tier 3 (must-run) will schedule it because of min_daily_runtime
+        # The entry's reason should be MIN_RUNTIME, not CHEAP_TARIFF
+        assert len(entries) >= 1
+        assert entries[0].reason == PlanReason.MIN_RUNTIME

@@ -23,7 +23,11 @@ PLATFORMS: list[Platform] = [
 
 # Keys that represent runtime state (toggled via switches/selects).
 # Changes to ONLY these keys should NOT trigger a full integration reload.
-_RUNTIME_STATE_KEYS = frozenset({"control_enabled", "force_charge", CONF_BATTERY_STRATEGY, "disabled_appliances", "overridden_appliances"})
+_RUNTIME_STATE_KEYS = frozenset({
+    "control_enabled", "force_charge", CONF_BATTERY_STRATEGY,
+    "disabled_appliances", "overridden_appliances",
+    "_grid_charge_engaged",
+})
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

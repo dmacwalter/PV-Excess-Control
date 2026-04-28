@@ -213,6 +213,7 @@ class Planner:
         timeline: list[TimeSlot],
         battery_config: BatteryConfig,
         current_soc: float,
+        tariff: TariffInfo | None = None,
     ) -> BatteryAllocation:
         """Determine battery charging allocation across the timeline.
 
@@ -220,6 +221,8 @@ class Planner:
             timeline: List of TimeSlot objects from build_timeline().
             battery_config: Battery configuration including capacity, target, strategy.
             current_soc: Current battery state of charge as a percentage (0-100).
+            tariff: Optional tariff info; when provided, battery_charge_price_threshold
+                    is used instead of slot.is_cheap for grid charging decisions.
 
         Returns:
             BatteryAllocation with charging needs and slot reservations.
@@ -248,7 +251,7 @@ class Planner:
             )
         elif strategy == BatteryStrategy.BATTERY_FIRST:
             return self._battery_first_strategy(
-                timeline, charging_needed_kwh, battery_config
+                timeline, charging_needed_kwh, battery_config, tariff
             )
         elif strategy == BatteryStrategy.BALANCED:
             return self._balanced_strategy(
@@ -291,11 +294,14 @@ class Planner:
         timeline: list[TimeSlot],
         charging_needed_kwh: float,
         battery_config: BatteryConfig,
+        tariff: TariffInfo | None = None,
     ) -> BatteryAllocation:
         """BATTERY_FIRST: reserve expected excess for charging until target met.
 
         Prefers cheapest slots first. If allow_grid_charging is enabled,
         cheap tariff windows are considered for grid charging.
+        When tariff is provided, battery_charge_price_threshold is used instead
+        of slot.is_cheap for grid charging decisions.
         """
         slots_reserved: list[TimeSlot] = []
         excess_after: dict[int, float] = {}
@@ -308,7 +314,13 @@ class Planner:
         for i, slot in enumerate(timeline):
             slot_excess = self._slot_excess_kwh(slot)
 
-            if battery_config.allow_grid_charging and slot.is_cheap:
+            battery_cheap = (
+                slot.price <= tariff.battery_charge_price_threshold
+                if tariff is not None
+                else slot.is_cheap
+            )
+
+            if battery_config.allow_grid_charging and battery_cheap:
                 # For cheap grid charging slots, the battery can charge from grid
                 # even if there's no solar excess. Use the full slot duration
                 # at some reasonable grid charging rate.
@@ -327,7 +339,13 @@ class Planner:
             if remaining_need <= 0:
                 break
 
-            if battery_config.allow_grid_charging and slot.is_cheap:
+            battery_cheap = (
+                slot.price <= tariff.battery_charge_price_threshold
+                if tariff is not None
+                else slot.is_cheap
+            )
+
+            if battery_config.allow_grid_charging and battery_cheap:
                 # For cheap grid charging: reserve the slot, battery charges from grid
                 # Calculate how much energy this slot can actually provide (based on duration)
                 slot_hours = (slot.end - slot.start).total_seconds() / 3600
@@ -405,6 +423,7 @@ class Planner:
         timeline: list[TimeSlot],
         battery_allocation: BatteryAllocation,
         appliances: list[ApplianceConfig],
+        cheap_price_threshold: float = 0.0,
     ) -> list[PlanEntry]:
         """Schedule appliances using greedy allocation, highest priority first.
 
@@ -435,7 +454,7 @@ class Planner:
 
         for appliance in sorted_appliances:
             app_entries = self._schedule_single_appliance(
-                timeline, remaining_excess, appliance
+                timeline, remaining_excess, appliance, cheap_price_threshold
             )
             entries.extend(app_entries)
 
@@ -446,6 +465,7 @@ class Planner:
         timeline: list[TimeSlot],
         remaining_excess: dict[int, float],
         appliance: ApplianceConfig,
+        cheap_price_threshold: float = 0.0,
     ) -> list[PlanEntry]:
         """Schedule a single appliance into available slots.
 
@@ -487,7 +507,8 @@ class Planner:
 
         # Standard greedy scheduling (no deadline)
         return self._schedule_greedy(
-            timeline, remaining_excess, appliance, energy_needed_kwh, power_kwh_per_hour
+            timeline, remaining_excess, appliance, energy_needed_kwh, power_kwh_per_hour,
+            cheap_price_threshold,
         )
 
     def _schedule_greedy(
@@ -497,6 +518,7 @@ class Planner:
         appliance: ApplianceConfig,
         energy_needed_kwh: float,
         power_kwh_per_hour: float,
+        cheap_price_threshold: float = 0.0,
     ) -> list[PlanEntry]:
         """Greedy scheduling: excess slots first, then cheap, then any remaining."""
         entries: list[PlanEntry] = []
@@ -534,9 +556,14 @@ class Planner:
 
         # Tier 2: Cheap tariff slots (if grid supplementation allowed)
         if remaining_energy > 0 and appliance.allow_grid_supplement:
+            effective_threshold = (
+                appliance.cheap_price_threshold
+                if appliance.cheap_price_threshold is not None
+                else cheap_price_threshold
+            )
             cheap_slots = [
                 (i, slot) for i, slot in enumerate(timeline)
-                if slot.is_cheap
+                if slot.price <= effective_threshold
             ]
             # Sort cheap slots by price ascending
             cheap_slots.sort(key=lambda x: x[1].price)
@@ -1028,7 +1055,7 @@ class Planner:
         # 2. Calculate battery strategy
         if battery_config is not None and current_soc is not None:
             battery_allocation = self.calculate_battery_strategy(
-                timeline, battery_config, current_soc
+                timeline, battery_config, current_soc, tariff=tariff
             )
             battery_target = BatteryTarget(
                 target_soc=battery_config.target_soc,
@@ -1054,7 +1081,10 @@ class Planner:
             )
 
         # 3. Schedule appliances
-        entries = self.schedule_appliances(timeline, battery_allocation, appliances)
+        entries = self.schedule_appliances(
+            timeline, battery_allocation, appliances,
+            cheap_price_threshold=tariff.cheap_price_threshold,
+        )
 
         # Rebuild remaining excess from battery allocation and subtract scheduled
         remaining_excess = dict(battery_allocation.excess_after_battery)

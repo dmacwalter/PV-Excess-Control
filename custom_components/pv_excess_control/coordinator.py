@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import time as _time
 from datetime import datetime, time, timedelta
 from typing import Any
 
@@ -65,6 +66,8 @@ from .const import (
     CONF_MAX_DAILY_ACTIVATIONS,
     CONF_MAX_DAILY_RUNTIME,
     CONF_MAX_GRID_POWER,
+    CONF_CHEAP_GRID_TARGET_CURRENT,
+    CONF_COMPLETION_POWER_THRESHOLD,
     CONF_OFF_THRESHOLD,
     CONF_ON_THRESHOLD,
     CONF_MIN_CURRENT,
@@ -102,6 +105,17 @@ from .const import (
     PlanInfluence,
     TariffProvider as TariffProviderEnum,
     ForecastProvider as ForecastProviderEnum,
+    CONF_AUTO_BATTERY_GRID_CHARGE,
+    CONF_BATTERY_GRID_CHARGE_POWER_W,
+    CONF_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES,
+    CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY,
+    CONF_INVERTER_FORCE_CHARGE_ENABLE_ENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_ENABLE_DISENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_MODE_ENTITY,
+    CONF_INVERTER_FORCE_CHARGE_MODE_ENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_MODE_DISENGAGE_VALUE,
+    CONF_INVERTER_FORCE_CHARGE_POWER_ENTITY,
+    DEFAULT_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES,
 )
 from .energy import create_tariff_provider
 from .forecast import create_forecast_provider
@@ -113,12 +127,14 @@ from .models import (
     BatteryDischargeAction,
     ControlDecision,
     ForecastData,
+    InverterGridChargeConfig,
     OptimizerResult,
     Plan,
     PowerState,
     TariffInfo,
 )
 from .analytics import AnalyticsTracker
+from .inverter_control import InverterGridChargeController
 from .notifications import NotificationManager
 from .optimizer import Optimizer
 from .planner import Planner
@@ -280,6 +296,15 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Runtime-writable control state (entity-driven)
         self.force_charge: bool = config_entry.data.get("force_charge", False)
+
+        # Inverter forced grid-charge state machine
+        self._inverter_ctl: InverterGridChargeController | None = self._build_inverter_controller()
+        self._grid_charge_engaged: bool = config_entry.data.get("_grid_charge_engaged", False)
+        self._grid_charge_engage_ts: float | None = None
+        self._force_charge_prev: bool = self.force_charge
+        self._latest_tariff = None
+        self._latest_power_state = None
+
         # Restore persisted enabled/override state from config_entry.data
         disabled_ids = set(config_entry.data.get("disabled_appliances", []))
         overridden_ids = set(config_entry.data.get("overridden_appliances", []))
@@ -290,12 +315,21 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             aid: True for aid in overridden_ids
         }
         self.appliance_priorities: dict[str, int] = {}
+        self.appliance_min_daily_runtime: dict[str, int | None] = {}
+        self.appliance_max_daily_runtime: dict[str, int | None] = {}
 
-        # Initialize runtime priorities from saved subentry data
+        # Initialize runtime priorities and runtime limits from saved subentry data
         subentries = getattr(config_entry, "subentries", {})
         for subentry_id, subentry in subentries.items():
-            saved_priority = subentry.data.get(CONF_APPLIANCE_PRIORITY, 500)
+            d = subentry.data
+            saved_priority = d.get(CONF_APPLIANCE_PRIORITY, 500)
             self.appliance_priorities[subentry_id] = saved_priority
+            # Seed only when the key exists; absence means "no override" —
+            # the read path falls through to subentry.data.
+            if CONF_MIN_DAILY_RUNTIME in d:
+                self.appliance_min_daily_runtime[subentry_id] = d[CONF_MIN_DAILY_RUNTIME]
+            if CONF_MAX_DAILY_RUNTIME in d:
+                self.appliance_max_daily_runtime[subentry_id] = d[CONF_MAX_DAILY_RUNTIME]
 
         # Track last-set battery discharge limit to avoid redundant calls.
         # Seed from actual entity value on startup to avoid unnecessary service calls.
@@ -397,6 +431,115 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             controller_interval,
             self._planner_interval,
         )
+
+    # ------------------------------------------------------------------
+    # Inverter grid-charge helpers (Task 10 plumbing)
+    # ------------------------------------------------------------------
+
+    def _build_inverter_controller(self) -> InverterGridChargeController | None:
+        """Construct the inverter controller from config_entry.data, or return None."""
+        d = self.config_entry.data
+        enable_entity = d.get(CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY)
+        if not enable_entity:
+            return None
+        cfg = InverterGridChargeConfig(
+            enable_entity_id=enable_entity,
+            enable_engage_value=d.get(CONF_INVERTER_FORCE_CHARGE_ENABLE_ENGAGE_VALUE, ""),
+            enable_disengage_value=d.get(CONF_INVERTER_FORCE_CHARGE_ENABLE_DISENGAGE_VALUE, ""),
+            mode_entity_id=d.get(CONF_INVERTER_FORCE_CHARGE_MODE_ENTITY),
+            mode_engage_value=d.get(CONF_INVERTER_FORCE_CHARGE_MODE_ENGAGE_VALUE),
+            mode_disengage_value=d.get(CONF_INVERTER_FORCE_CHARGE_MODE_DISENGAGE_VALUE),
+            power_entity_id=d.get(CONF_INVERTER_FORCE_CHARGE_POWER_ENTITY),
+        )
+        try:
+            return InverterGridChargeController(self.hass, cfg)
+        except ValueError as err:
+            _LOGGER.error("Inverter grid-charge controller misconfigured: %s", err)
+            return None
+
+    def _persist_grid_charge_state(self, engaged: bool) -> None:
+        """Persist the engagement flag to config_entry.data via async_update_entry.
+
+        Uses the runtime-state-key bypass so this does not trigger a reload.
+        """
+        new_data = dict(self.config_entry.data)
+        new_data["_grid_charge_engaged"] = engaged
+        self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+
+    def auto_should_engage_now(self) -> bool:
+        """Evaluate the auto-engage gate against the latest snapshots."""
+        d = self.config_entry.data
+        if not d.get(CONF_AUTO_BATTERY_GRID_CHARGE, False):
+            return False
+        if self._latest_tariff is None or self._latest_power_state is None:
+            return False
+        target_soc = d.get(CONF_BATTERY_TARGET_SOC, 80)
+        cheap_now = self._latest_tariff.current_price <= self._latest_tariff.battery_charge_price_threshold
+        soc = self._latest_power_state.battery_soc
+        soc_below_target = soc is None or soc < target_soc
+        return cheap_now and soc_below_target
+
+    async def _run_grid_charge_state_machine(
+        self, tariff_info, power_state,
+    ) -> None:
+        """Engage / disengage forced grid charge based on price + SoC + force_charge.
+
+        Idempotent. Safe to call without _inverter_ctl.
+        """
+        d = self.config_entry.data
+        power_w = d.get(CONF_BATTERY_GRID_CHARGE_POWER_W)
+        if self._inverter_ctl is None or power_w is None:
+            return  # nothing to drive
+
+        auto_flag = d.get(CONF_AUTO_BATTERY_GRID_CHARGE, False)
+        target_soc = d.get(CONF_BATTERY_TARGET_SOC, 80)
+        min_dur_s = d.get(
+            CONF_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES,
+            DEFAULT_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES,
+        ) * 60
+
+        cheap_now = (
+            tariff_info is not None
+            and tariff_info.current_price <= tariff_info.battery_charge_price_threshold
+        )
+        soc = getattr(power_state, "battery_soc", None) if power_state is not None else None
+        soc_below_target = soc is None or soc < target_soc
+
+        auto_should_engage = auto_flag and cheap_now and soc_below_target
+        should_engage = self.force_charge or auto_should_engage
+
+        force_off_edge = self._force_charge_prev and not self.force_charge
+        self._force_charge_prev = self.force_charge
+
+        if should_engage and not self._grid_charge_engaged:
+            await self._inverter_ctl.engage(power_w)
+            self._grid_charge_engaged = True
+            self._grid_charge_engage_ts = _time.monotonic()
+            self._persist_grid_charge_state(True)
+            method = getattr(self.notifications, "notify_battery_grid_charge_engaged", None)
+            if method is not None:
+                try:
+                    await method(power_w)
+                except Exception:
+                    _LOGGER.exception("Failed to send grid_charge_engaged notification")
+
+        elif (not should_engage) and self._grid_charge_engaged:
+            elapsed = _time.monotonic() - (self._grid_charge_engage_ts or 0.0)
+            if elapsed >= min_dur_s or force_off_edge:
+                await self._inverter_ctl.disengage()
+                self._grid_charge_engaged = False
+                self._grid_charge_engage_ts = None
+                self._persist_grid_charge_state(False)
+                reason = (
+                    "manual force_charge switch off" if force_off_edge
+                    else "price above threshold or SoC reached target"
+                )
+                method = getattr(self.notifications, "notify_battery_grid_charge_disengaged", None)
+                if method is not None:
+                    try:
+                        await method(reason)
+                    except Exception:
+                        _LOGGER.exception("Failed to send grid_charge_disengaged notification")
 
     @property
     def enabled(self) -> bool:
@@ -530,6 +673,13 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             len(tariff_info.windows),
         )
 
+        # Cache the latest snapshots so the snappy switch handler can re-evaluate
+        self._latest_tariff = tariff_info
+        self._latest_power_state = power_state
+
+        # Run the inverter forced grid-charge state machine
+        await self._run_grid_charge_state_machine(tariff_info, power_state)
+
         # 7. Build empty plan if none exists
         plan = self.current_plan or self._create_empty_plan()
 
@@ -589,6 +739,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 plan_influence=self._plan_influence,
                 min_battery_soc=min_battery_soc,
                 force_charge=self.force_charge,
+                auto_grid_charge_engaged=self._grid_charge_engaged,
             )
         except Exception as err:
             _LOGGER.error("Optimizer error: %s", err)
@@ -862,8 +1013,12 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         subentries = getattr(self.config_entry, "subentries", {})
         for subentry_id, subentry in subentries.items():
             sub_data = subentry.data
-            min_runtime_min = sub_data.get(CONF_MIN_DAILY_RUNTIME)
-            max_runtime_min = sub_data.get(CONF_MAX_DAILY_RUNTIME)
+            min_runtime_min = self.appliance_min_daily_runtime.get(
+                subentry_id, sub_data.get(CONF_MIN_DAILY_RUNTIME)
+            )
+            max_runtime_min = self.appliance_max_daily_runtime.get(
+                subentry_id, sub_data.get(CONF_MAX_DAILY_RUNTIME)
+            )
             deadline_str = sub_data.get(CONF_SCHEDULE_DEADLINE)
             max_activations = sub_data.get(CONF_MAX_DAILY_ACTIVATIONS)
             if max_activations is not None:
@@ -928,6 +1083,8 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 switch_interval=switch_interval,
                 allow_grid_supplement=sub_data.get(CONF_ALLOW_GRID_SUPPLEMENT, False),
                 max_grid_power=sub_data.get(CONF_MAX_GRID_POWER),
+                cheap_grid_target_current=sub_data.get(CONF_CHEAP_GRID_TARGET_CURRENT),
+                cheap_price_threshold=sub_data.get(CONF_CHEAP_PRICE_THRESHOLD),
                 averaging_window=sub_data.get(CONF_AVERAGING_WINDOW),
                 requires_appliance=sub_data.get(CONF_REQUIRES_APPLIANCE),
                 helper_only=sub_data.get(CONF_HELPER_ONLY, False),
@@ -936,6 +1093,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 override_active=override_active,
                 max_daily_activations=max_activations,
                 on_threshold=sub_data.get(CONF_ON_THRESHOLD),
+                completion_power_threshold=sub_data.get(CONF_COMPLETION_POWER_THRESHOLD),
             )
             configs.append(config)
 
@@ -953,7 +1111,17 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Use ALL subentry IDs (not just configs) so disabled appliances keep
         # their appliance_enabled[id] = False entry instead of being re-enabled.
         active_ids = set(subentries.keys())
-        for d in (self._last_state_change, self._last_applied_current, self._activations_today, self._previous_is_on, self.appliance_enabled, self.appliance_overrides, self.appliance_priorities):
+        for d in (
+            self._last_state_change,
+            self._last_applied_current,
+            self._activations_today,
+            self._previous_is_on,
+            self.appliance_enabled,
+            self.appliance_overrides,
+            self.appliance_priorities,
+            self.appliance_min_daily_runtime,
+            self.appliance_max_daily_runtime,
+        ):
             stale = [k for k in d if k not in active_ids]
             for k in stale:
                 del d[k]
@@ -1017,9 +1185,18 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Increment runtime and energy if the appliance is currently ON
             if is_on and previous is not None:
                 cycle_seconds = self.update_interval.total_seconds()
-                runtime_today += timedelta(seconds=cycle_seconds)
+                # Gate runtime on actual power when completion threshold is configured
+                counts_as_running = (
+                    config.completion_power_threshold is None
+                    or current_power >= config.completion_power_threshold
+                )
+                if counts_as_running:
+                    runtime_today += timedelta(seconds=cycle_seconds)
                 # Energy in kWh: power(W) * time(h)
-                power_for_energy = current_power if current_power > 0 else config.nominal_power
+                power_for_energy = (
+                    current_power if current_power > 0
+                    else (0.0 if config.actual_power_entity else config.nominal_power)
+                )
                 energy_today += (power_for_energy * cycle_seconds) / 3600 / 1000
 
             # Seed last_state_change for appliances that are ON but have no
@@ -1475,11 +1652,15 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
 
         sub_data = subentry.data
-        min_runtime_min = sub_data.get(CONF_MIN_DAILY_RUNTIME)
-        max_runtime_min = sub_data.get(CONF_MAX_DAILY_RUNTIME)
+        min_runtime_min = self.appliance_min_daily_runtime.get(
+            appliance_id, sub_data.get(CONF_MIN_DAILY_RUNTIME)
+        )
+        max_runtime_min = self.appliance_max_daily_runtime.get(
+            appliance_id, sub_data.get(CONF_MAX_DAILY_RUNTIME)
+        )
         deadline_str = sub_data.get(CONF_SCHEDULE_DEADLINE)
 
-        # Apply runtime overrides (same as _get_appliance_configs)
+        # Priority may be overridden by runtime dict (same as _get_appliance_configs).
         priority = self.appliance_priorities.get(
             appliance_id, sub_data.get(CONF_APPLIANCE_PRIORITY, 500)
         )
@@ -1519,6 +1700,8 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )),
             allow_grid_supplement=sub_data.get(CONF_ALLOW_GRID_SUPPLEMENT, False),
             max_grid_power=sub_data.get(CONF_MAX_GRID_POWER),
+            cheap_grid_target_current=sub_data.get(CONF_CHEAP_GRID_TARGET_CURRENT),
+            cheap_price_threshold=sub_data.get(CONF_CHEAP_PRICE_THRESHOLD),
             averaging_window=sub_data.get(CONF_AVERAGING_WINDOW),
             requires_appliance=sub_data.get(CONF_REQUIRES_APPLIANCE),
             helper_only=sub_data.get(CONF_HELPER_ONLY, False),
@@ -1531,6 +1714,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else None
             ),
             on_threshold=sub_data.get(CONF_ON_THRESHOLD),
+            completion_power_threshold=sub_data.get(CONF_COMPLETION_POWER_THRESHOLD),
         )
 
     async def _turn_off_all_managed(self) -> None:

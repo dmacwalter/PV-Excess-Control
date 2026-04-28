@@ -105,6 +105,20 @@ class NotificationManager:
             f"Battery force charge {action}",
         )
 
+    async def notify_battery_grid_charge_engaged(self, power_w: float) -> bool:
+        """Send notification when the integration commands the inverter to grid-charge."""
+        return await self.async_notify(
+            NotificationEvent.FORCE_CHARGE,
+            f"Battery grid charge started: {power_w:.0f}W",
+        )
+
+    async def notify_battery_grid_charge_disengaged(self, reason: str) -> bool:
+        """Send notification when the integration releases the inverter from grid-charge."""
+        return await self.async_notify(
+            NotificationEvent.FORCE_CHARGE,
+            f"Battery grid charge stopped: {reason}",
+        )
+
     async def notify_sensor_unavailable(self, sensor_name: str) -> bool:
         """Send notification that a required sensor is unavailable."""
         return await self.async_notify(

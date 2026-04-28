@@ -83,6 +83,9 @@ def _make_appliance(
     max_daily_activations: int | None = None,
     on_threshold: int | None = None,
     helper_only: bool = False,
+    cheap_price_threshold: float | None = None,
+    completion_power_threshold: float | None = None,
+    cheap_grid_target_current: float | None = None,
 ) -> ApplianceConfig:
     return ApplianceConfig(
         id=id,
@@ -114,6 +117,9 @@ def _make_appliance(
         max_daily_activations=max_daily_activations,
         on_threshold=on_threshold,
         helper_only=helper_only,
+        cheap_price_threshold=cheap_price_threshold,
+        completion_power_threshold=completion_power_threshold,
+        cheap_grid_target_current=cheap_grid_target_current,
     )
 
 
@@ -1006,6 +1012,87 @@ class TestOptimizerTariff:
         # Should turn ON via grid supplement: export solar, buy from grid
         assert decision.action == Action.ON
         assert "grid supplement" in decision.reason.lower() or "export solar" in decision.reason.lower()
+
+    def test_per_appliance_cheap_threshold_allows_supplement(self):
+        """Per-appliance threshold (higher) allows grid supplement even when global would block."""
+        optimizer = _optimizer_for_tests()
+        # Global threshold is 0.10, per-appliance is 0.20, current price is 0.15
+        # Global would block (0.15 > 0.10), but per-appliance allows (0.15 <= 0.20)
+        appliance = _make_appliance(
+            nominal_power=2000.0,
+            allow_grid_supplement=True,
+            max_grid_power=2000.0,
+            cheap_price_threshold=0.20,
+        )
+        state = _make_state()
+        power = _make_power(excess=500.0)
+        tariff = _make_tariff(current_price=0.15, feed_in=0.08, cheap_threshold=0.10)
+
+        result = optimizer.optimize(
+            power_state=power,
+            appliances=[appliance],
+            appliance_states=[state],
+            plan=_empty_plan(),
+            power_history=[power],
+            tariff=tariff,
+        )
+
+        assert len(result.decisions) == 1
+        assert result.decisions[0].action == Action.ON
+
+    def test_per_appliance_cheap_threshold_blocks_supplement(self):
+        """Per-appliance threshold (lower) blocks grid supplement even when global would allow."""
+        optimizer = _optimizer_for_tests()
+        # Global threshold is 0.10, per-appliance is 0.04, current price is 0.05
+        # Global would allow (0.05 <= 0.10), but per-appliance blocks (0.05 > 0.04)
+        # feed_in=0.03 < current_price=0.05 so arbitrage path (export solar) does NOT fire
+        appliance = _make_appliance(
+            nominal_power=2000.0,
+            allow_grid_supplement=True,
+            max_grid_power=2000.0,
+            cheap_price_threshold=0.04,
+        )
+        state = _make_state()
+        power = _make_power(excess=500.0)
+        tariff = _make_tariff(current_price=0.05, feed_in=0.03, cheap_threshold=0.10)
+
+        result = optimizer.optimize(
+            power_state=power,
+            appliances=[appliance],
+            appliance_states=[state],
+            plan=_empty_plan(),
+            power_history=[power],
+            tariff=tariff,
+        )
+
+        assert len(result.decisions) == 1
+        assert result.decisions[0].action == Action.IDLE
+
+    def test_none_appliance_threshold_uses_global(self):
+        """When per-appliance threshold is None, global threshold is used."""
+        optimizer = _optimizer_for_tests()
+        # No per-appliance threshold set, global is 0.10, price is 0.05
+        appliance = _make_appliance(
+            nominal_power=2000.0,
+            allow_grid_supplement=True,
+            max_grid_power=2000.0,
+            cheap_price_threshold=None,
+        )
+        state = _make_state()
+        power = _make_power(excess=500.0)
+        tariff = _make_tariff(current_price=0.05, feed_in=0.08, cheap_threshold=0.10)
+
+        result = optimizer.optimize(
+            power_state=power,
+            appliances=[appliance],
+            appliance_states=[state],
+            plan=_empty_plan(),
+            power_history=[power],
+            tariff=tariff,
+        )
+
+        assert len(result.decisions) == 1
+        assert result.decisions[0].action == Action.ON
 
 
 # ---------------------------------------------------------------------------
@@ -2493,6 +2580,113 @@ class TestDeadlineReasonStrings:
             f"Expected '(tomorrow)' suffix on overnight deadline, got: "
             f"{decision.reason!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# TestDeadlineMustRunShedProtection
+# ---------------------------------------------------------------------------
+
+class TestDeadlineMustRunShedProtection:
+    """Deadline must-run decisions bypass cooldown and are excluded from SHED."""
+
+    def test_standard_must_run_bypasses_cooldown(self) -> None:
+        """Standard (non-dynamic) deadline must-run sets bypasses_cooldown=True."""
+        appliance = _make_appliance(
+            id="heater",
+            nominal_power=6000.0,
+            min_daily_runtime=timedelta(hours=3),
+        )
+        from dataclasses import replace
+        from datetime import time as dt_time
+        appliance = replace(appliance, schedule_deadline=dt_time(14, 0), min_daily_runtime=timedelta(hours=25))
+
+        state = _make_state(id="heater", is_on=False, current_power=0.0, runtime_today=timedelta())
+        power = _make_power(excess=-800.0)
+        opt = _optimizer_for_tests()
+        result = opt.optimize(
+            power_state=power,
+            appliances=[appliance],
+            appliance_states=[state],
+            plan=_empty_plan(),
+            power_history=[power],
+            tariff=_make_tariff(),
+        )
+        decision = result.decisions[0]
+        assert decision.action == Action.ON
+        assert "Deadline must-run" in decision.reason
+        assert decision.bypasses_cooldown is True
+
+    def test_dynamic_must_run_bypasses_cooldown(self) -> None:
+        """Dynamic current deadline must-run sets bypasses_cooldown=True."""
+        appliance = _make_appliance(
+            id="ev",
+            nominal_power=11000.0,
+            dynamic_current=True,
+            current_entity="number.ev_current",
+            min_current=6.0,
+            max_current=16.0,
+            phases=3,
+            min_daily_runtime=timedelta(hours=3),
+        )
+        from dataclasses import replace
+        from datetime import time as dt_time
+        appliance = replace(appliance, schedule_deadline=dt_time(14, 0), min_daily_runtime=timedelta(hours=25))
+
+        state = _make_state(id="ev", is_on=False, current_power=0.0, runtime_today=timedelta())
+        power = _make_power(excess=-800.0)
+        opt = _optimizer_for_tests()
+        result = opt.optimize(
+            power_state=power,
+            appliances=[appliance],
+            appliance_states=[state],
+            plan=_empty_plan(),
+            power_history=[power],
+            tariff=_make_tariff(),
+        )
+        decision = result.decisions[0]
+        assert decision.action == Action.SET_CURRENT
+        assert "Deadline must-run" in decision.reason
+        assert decision.bypasses_cooldown is True
+
+    def test_shed_skips_must_run_appliance(self) -> None:
+        """SHED must not turn off an appliance whose decision has bypasses_cooldown=True.
+
+        Scenario: two appliances. Heater is forced ON by must-run (bypasses_cooldown),
+        lamp is a normal ON. With negative budget, SHED should only shed the lamp.
+        """
+        heater = _make_appliance(
+            id="heater",
+            nominal_power=6000.0,
+            priority=2,
+            min_daily_runtime=timedelta(hours=3),
+        )
+        from dataclasses import replace
+        from datetime import time as dt_time
+        heater = replace(heater, schedule_deadline=dt_time(14, 0), min_daily_runtime=timedelta(hours=25))
+
+        lamp = _make_appliance(id="lamp", nominal_power=200.0, priority=5)
+
+        heater_state = _make_state(id="heater", is_on=False, current_power=0.0, runtime_today=timedelta())
+        lamp_state = _make_state(id="lamp", is_on=True, current_power=200.0, runtime_today=timedelta(hours=1))
+
+        power = _make_power(excess=-5000.0)
+        opt = _optimizer_for_tests()
+        result = opt.optimize(
+            power_state=power,
+            appliances=[heater, lamp],
+            appliance_states=[heater_state, lamp_state],
+            plan=_empty_plan(),
+            power_history=[power],
+            tariff=_make_tariff(),
+        )
+        decisions_by_id = {d.appliance_id: d for d in result.decisions}
+
+        # Heater should stay ON (must-run, protected from SHED)
+        assert decisions_by_id["heater"].action == Action.ON
+        assert "Deadline must-run" in decisions_by_id["heater"].reason
+
+        # Lamp should be shed (OFF)
+        assert decisions_by_id["lamp"].action == Action.OFF
 
 
 # ---------------------------------------------------------------------------
@@ -4044,3 +4238,577 @@ class TestKonaProdRegression2026_04_08:
             f"Kona was shed OFF at event {label} despite physical excess +{cur:.0f}W. "
             f"Reason: {kona_decision.reason!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# TestCheapWindowTargetAmps
+# ---------------------------------------------------------------------------
+
+class TestCheapWindowTargetAmps:
+    """Unit tests for Optimizer._cheap_window_target_amps."""
+
+    def test_returns_none_when_override_unset(self):
+        optimizer = _optimizer_for_tests()
+        appliance = _make_appliance(cheap_grid_target_current=None, allow_grid_supplement=True)
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+        assert optimizer._cheap_window_target_amps(appliance, tariff, phases=3) is None
+
+    def test_returns_none_when_grid_supplement_disabled(self):
+        optimizer = _optimizer_for_tests()
+        appliance = _make_appliance(cheap_grid_target_current=16.0, allow_grid_supplement=False)
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+        assert optimizer._cheap_window_target_amps(appliance, tariff, phases=3) is None
+
+    def test_returns_none_when_not_cheap(self):
+        optimizer = _optimizer_for_tests()
+        appliance = _make_appliance(
+            cheap_grid_target_current=16.0,
+            allow_grid_supplement=True,
+            cheap_price_threshold=0.05,
+        )
+        tariff = _make_tariff(current_price=0.10, cheap_threshold=0.05)
+        assert optimizer._cheap_window_target_amps(appliance, tariff, phases=3) is None
+
+    def test_returns_override_clamped_by_max_current(self):
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            cheap_grid_target_current=20.0,
+            max_current=16.0,
+            min_current=6.0,
+            allow_grid_supplement=True,
+            cheap_price_threshold=0.05,
+            current_step=0.1,
+        )
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+        # 20A clamped to max_current=16A
+        assert optimizer._cheap_window_target_amps(appliance, tariff, phases=3) == 16.0
+
+    def test_capped_by_max_grid_power(self):
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            cheap_grid_target_current=16.0,
+            max_current=16.0,
+            min_current=6.0,
+            max_grid_power=4000.0,
+            allow_grid_supplement=True,
+            cheap_price_threshold=0.05,
+            current_step=0.1,
+            phases=3,
+        )
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+        # 4000 / (230 * 3) = 5.797 → step_floor 0.1 → 5.7
+        result = optimizer._cheap_window_target_amps(appliance, tariff, phases=3)
+        assert result == 5.7
+
+    def test_clamped_up_to_min_current(self):
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            cheap_grid_target_current=4.0,
+            max_current=16.0,
+            min_current=6.0,
+            allow_grid_supplement=True,
+            cheap_price_threshold=0.05,
+            current_step=0.1,
+        )
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+        # Override 4A < min_current 6A → clamped up to 6A
+        assert optimizer._cheap_window_target_amps(appliance, tariff, phases=3) == 6.0
+
+
+# ---------------------------------------------------------------------------
+# TestCheapGridTargetSite1
+# ---------------------------------------------------------------------------
+
+class TestCheapGridTargetSite1:
+    """Tests for the grid-supplement entry point in _allocate_dynamic_current (Site 1).
+
+    When there is insufficient solar excess to start a dynamic-current appliance
+    but the tariff is cheap, Site 1 now uses _cheap_window_target_amps to pick
+    the target amperage instead of hard-coding min_current.
+    """
+
+    def test_dynamic_current_cheap_grid_target_default_max(self):
+        """OFF appliance, cheap, low excess, override=max_current → SET_CURRENT max_current."""
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            cheap_grid_target_current=16.0,
+        )
+        state = _make_state(appliance.id, is_on=False)
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+
+        decision, power_consumed = optimizer._allocate_dynamic_current(
+            appliance, state, avg_budget=0.0, tariff=tariff, plan=None,
+        )
+        assert decision.action == Action.SET_CURRENT
+        assert decision.target_current == 16.0
+        # Solar portion = max(0, 0) = 0; grid carries the rest
+        assert power_consumed == 0.0
+
+    def test_dynamic_current_cheap_grid_target_capped_by_max_grid_power(self):
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            max_grid_power=4000.0, cheap_grid_target_current=16.0,
+        )
+        state = _make_state(appliance.id, is_on=False)
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+
+        decision, _ = optimizer._allocate_dynamic_current(
+            appliance, state, avg_budget=0.0, tariff=tariff, plan=None,
+        )
+        # 4000W / (230*3) = 5.797A → floored 5.7
+        assert decision.action == Action.SET_CURRENT
+        assert decision.target_current == 5.7
+
+    def test_dynamic_current_cheap_grid_target_none_preserves_min_current_behavior(self):
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            cheap_grid_target_current=None,
+        )
+        state = _make_state(appliance.id, is_on=False)
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+
+        decision, _ = optimizer._allocate_dynamic_current(
+            appliance, state, avg_budget=0.0, tariff=tariff, plan=None,
+        )
+        assert decision.action == Action.SET_CURRENT
+        assert decision.target_current == 6.0  # min_current, the existing behaviour
+
+    def test_dynamic_current_override_requires_grid_supplement(self):
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=False,  # disabled
+            cheap_price_threshold=0.05, cheap_grid_target_current=16.0,
+        )
+        state = _make_state(appliance.id, is_on=False)
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+
+        decision, _ = optimizer._allocate_dynamic_current(
+            appliance, state, avg_budget=0.0, tariff=tariff, plan=None,
+        )
+        # Override is gated by allow_grid_supplement → existing IDLE branch fires
+        assert decision.action == Action.IDLE
+
+
+# ---------------------------------------------------------------------------
+# TestCheapGridTargetSite2
+# ---------------------------------------------------------------------------
+
+class TestCheapGridTargetSite2:
+    """Tests for the natural-scaling path in _allocate_dynamic_current (Site 2).
+
+    When there IS enough solar excess to start a dynamic-current appliance
+    naturally, but the tariff is cheap and an override is set, Site 2 clamps
+    the computed target_amps UP to the override value.
+    """
+
+    def test_dynamic_current_natural_scaling_clamps_up_to_override_when_cheap(self):
+        """OFF appliance starting on partial solar + cheap tariff → uses override even though excess alone supports a lower current."""
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            cheap_grid_target_current=16.0,
+        )
+        state = _make_state(appliance.id, is_on=False)
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+
+        # Excess supports natural amps of 5520/(230*3) = 8A — without override, decision would be 8A.
+        # Need avg_budget >= min_watts_needed (6 * 230 * 3 = 4140 + on_threshold) to enter natural-scaling path.
+        decision, _ = optimizer._allocate_dynamic_current(
+            appliance, state, avg_budget=5520.0, tariff=tariff, plan=None,
+        )
+        assert decision.action == Action.SET_CURRENT
+        assert decision.target_current == 16.0  # override clamped up
+
+    def test_dynamic_current_natural_scaling_no_override_when_not_cheap(self):
+        """OFF appliance, NOT cheap, override set → existing solar-driven behaviour."""
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            cheap_grid_target_current=16.0,
+        )
+        state = _make_state(appliance.id, is_on=False)
+        tariff = _make_tariff(current_price=0.10, cheap_threshold=0.05)  # not cheap
+
+        decision, _ = optimizer._allocate_dynamic_current(
+            appliance, state, avg_budget=5520.0, tariff=tariff, plan=None,
+        )
+        # 5520/(230*3) = 8.0A naturally
+        assert decision.action == Action.SET_CURRENT
+        assert decision.target_current == 8.0
+
+    def test_dynamic_current_natural_scaling_capped_by_max_grid_power_when_cheap(self):
+        """Site 2: cheap window with max_grid_power cap dominating override.
+
+        Large solar excess naturally supports max_current=16A, but with
+        max_grid_power=4000W, _cheap_window_target_amps returns 5.7A
+        (4000/(230*3)=5.797 → step_floor 0.1 = 5.7). Site 2's strict-greater
+        guard means the natural 16A is preserved (override 5.7 < natural 16),
+        so the test confirms the natural path is NOT clamped down by the
+        override — the override only ever clamps UP."""
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            max_grid_power=4000.0, cheap_grid_target_current=16.0,
+        )
+        state = _make_state(appliance.id, is_on=False)
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+
+        # avg_budget large enough to naturally support max_current
+        decision, _ = optimizer._allocate_dynamic_current(
+            appliance, state, avg_budget=15_000.0, tariff=tariff, plan=None,
+        )
+        # Natural is 16A (clamped to max_current). Override capped to 5.7 by
+        # max_grid_power. Site 2 only clamps UP (strict greater), so 16 stays.
+        assert decision.action == Action.SET_CURRENT
+        assert decision.target_current == 16.0
+
+
+# ---------------------------------------------------------------------------
+# TestCheapGridTargetSite3
+# ---------------------------------------------------------------------------
+
+class TestCheapGridTargetSite3:
+    """Tests for the already-ON dynamic-current branch in _allocate_appliance (Site 3).
+
+    When an appliance is already ON and being adjusted by dynamic current,
+    the cheap-window override clamps target_amps UP if the tariff is cheap.
+    """
+
+    def test_dynamic_current_already_on_clamps_up_to_override_when_cheap(self):
+        """ON appliance, cheap, low solar → stays at override target (grid supplements)."""
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            cheap_grid_target_current=16.0,
+        )
+        # Currently drawing min_current (4140W = 6A * 230V * 3 phases)
+        state = _make_state(appliance.id, is_on=True, current_power=4140.0)
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+
+        # avg_budget=0, instant_budget=0 → without override, natural target_amps would clamp at 6A
+        # (current_power=4140W + budget 0 = 4140W → 4140/(230*3)=6.0A clamped to min_current).
+        # With override=16A, Site 3 should clamp UP to 16A.
+        decision, _ = optimizer._allocate_appliance(
+            appliance, state, avg_budget=0.0, instant_budget=0.0,
+            plan=None, tariff=tariff,
+        )
+        assert decision.action == Action.SET_CURRENT
+        assert decision.target_current == 16.0
+
+    def test_dynamic_current_already_on_no_override_when_not_cheap(self):
+        """ON appliance, NOT cheap → existing solar-driven scaling preserved."""
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            cheap_grid_target_current=16.0,
+        )
+        state = _make_state(appliance.id, is_on=True, current_power=4140.0)
+        tariff = _make_tariff(current_price=0.10, cheap_threshold=0.05)  # NOT cheap
+
+        decision, _ = optimizer._allocate_appliance(
+            appliance, state, avg_budget=0.0, instant_budget=0.0,
+            plan=None, tariff=tariff,
+        )
+        # Without override, current_power 4140 + 0 budget → 4140/(230*3)=6.0A, clamped to min_current
+        assert decision.action == Action.SET_CURRENT
+        assert decision.target_current == 6.0
+
+    def test_dynamic_current_already_on_override_capped_by_max_grid_power(self):
+        """ON appliance, cheap, override=max_current=16A, max_grid_power=4000W → cap to 5.7A.
+        But min_current=6.0 means natural target_amps stays at 6A (current 6A + 0 budget).
+        Override result is 5.7A (capped by max_grid_power), which is LESS than natural 6A.
+        Strict-greater clamp does NOT modify, so target stays at 6A."""
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            max_grid_power=4000.0, cheap_grid_target_current=16.0,
+        )
+        state = _make_state(appliance.id, is_on=True, current_power=4140.0)
+        tariff = _make_tariff(current_price=0.01, cheap_threshold=0.05)
+
+        decision, _ = optimizer._allocate_appliance(
+            appliance, state, avg_budget=0.0, instant_budget=0.0,
+            plan=None, tariff=tariff,
+        )
+        # 4000/(230*3) = 5.797 → floored 5.7A. min_current=6.0 clamps natural up → 6.0
+        # Override 5.7 < natural 6.0, strict-greater fails, target stays at 6.0
+        assert decision.action == Action.SET_CURRENT
+        assert decision.target_current == 6.0
+
+    def test_already_on_override_active_reason_tagged_for_shed_guard(self):
+        """When the override clamps an already-ON dynamic-current appliance UP,
+        the decision's reason MUST contain 'grid supplement' so SHED's guard at
+        optimizer.py:~1483 (`'grid supplement' in decision.reason.lower()`)
+        skips it. Otherwise the inflated power_delta drives instant_budget
+        negative and SHED reduces the appliance back to min_current.
+
+        Regression test for the prod incident on 2026-04-26 where Kona stuck
+        at 6A despite cheap_grid_target_current=16A and -€0.086/kWh price.
+        """
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            cheap_grid_target_current=16.0,
+        )
+        state = _make_state(appliance.id, is_on=True, current_power=2978.0)
+        tariff = _make_tariff(current_price=-0.086, cheap_threshold=0.05)
+
+        decision, power_delta = optimizer._allocate_appliance(
+            appliance, state, avg_budget=4410.0, instant_budget=4410.0,
+            plan=None, tariff=tariff,
+        )
+        assert decision.action == Action.SET_CURRENT
+        assert decision.target_current == 16.0
+        assert "grid supplement" in decision.reason.lower(), (
+            f"reason '{decision.reason}' missing 'grid supplement' tag — "
+            "SHED guard will not skip this decision"
+        )
+        # Budget deduction must be the solar-supportable portion (= available −
+        # current_power = avg_budget) only, not the full power_delta (= override
+        # target × V × phases − current_power), so other appliances are not
+        # collateral-shed when override fires.
+        # Old bug: power_delta = 11040 − 2978 = 8062 → instant_budget
+        # 4410 − 8062 = −3652 → SHED fires.
+        # New fix: power_delta = solar-supportable = 4410 → instant_budget 0.
+        full_delta = 16.0 * 230 * 3 - 2978.0  # 8062
+        assert power_delta < full_delta, (
+            f"power_delta={power_delta} not capped to solar portion; "
+            "SHED would receive negative instant_budget and shed other appliances"
+        )
+        assert power_delta == 4410.0  # exactly the solar-supportable portion
+
+    def test_already_on_override_active_when_natural_target_below_min_current(self):
+        """When raw_amps from the dual-budget formula falls below min_current
+        (e.g. avg_budget runs deeper negative than instant_budget mid-cycle),
+        the early-return at optimizer.py:~698 used to bypass the override and
+        emit a SHED-eligible 'Staying on…' reason. With the override active,
+        the override target must take precedence — the early return must NOT
+        fire, and the decision MUST be tagged 'grid supplement' so SHED's
+        guard skips it.
+
+        Regression test for the prod incident on 2026-04-26 at 10:42:43 UTC
+        where Kona was shed despite cheap_grid_target_current=16A and price
+        at -€0.137/kWh, because excess_for_adjustment dipped below
+        (min_current * V * phases − current_power) = -7360W.
+        """
+        optimizer = _optimizer_for_tests(grid_voltage=230)
+        appliance = _make_appliance(
+            dynamic_current=True, current_entity="number.kona_curr",
+            min_current=6.0, max_current=16.0, phases=3, current_step=0.1,
+            allow_grid_supplement=True, cheap_price_threshold=0.05,
+            cheap_grid_target_current=16.0,
+        )
+        # Kona running at full power; excess_for_adjustment dropped below
+        # the min_current threshold (raw_amps = (-7500 + 11500)/690 = 5.8A
+        # < min_current 6.0A → would have triggered the early return).
+        state = _make_state(appliance.id, is_on=True, current_power=11500.0)
+        tariff = _make_tariff(current_price=-0.137, cheap_threshold=0.05)
+
+        decision, _ = optimizer._allocate_appliance(
+            appliance, state, avg_budget=-7500.0, instant_budget=-7500.0,
+            plan=None, tariff=tariff,
+        )
+        assert decision.action == Action.SET_CURRENT, (
+            f"override must skip the early return; got action={decision.action} "
+            f"reason='{decision.reason}'"
+        )
+        assert decision.target_current == 16.0
+        assert "grid supplement" in decision.reason.lower(), (
+            f"reason '{decision.reason}' missing 'grid supplement' tag — "
+            "SHED guard will not skip this decision"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 cheap-tariff discharge block (2026-04-26)
+# ---------------------------------------------------------------------------
+
+
+class TestPhase4CheapTariffDischargeBlock:
+    """Phase 4 third trigger: block all battery discharge when the integration
+    is in any flavour of grid-import mode (cheap-window override active,
+    opportunity-cost grid supplement active, manual force_charge ON, or
+    auto-grid-charge state machine engaged)."""
+
+    @staticmethod
+    def _decision(appliance_id: str, action: Action, reason: str):
+        return ControlDecision(
+            appliance_id=appliance_id, action=action,
+            target_current=None, reason=reason, overrides_plan=False,
+        )
+
+    def test_cheap_window_override_decision_blocks_discharge(self):
+        """A decision with the cheap-window-override grid-supplement tag
+        triggers the discharge block."""
+        optimizer = _optimizer_for_tests()
+        appliance = _make_appliance(id="kona")
+        decisions = [self._decision(
+            "kona", Action.SET_CURRENT,
+            "Grid supplement (cheap-window target): 16.0A (11040W, 4909W solar-supportable)",
+        )]
+
+        action = optimizer._battery_discharge_protection(
+            decisions, [appliance],
+        )
+
+        assert action.should_limit is True
+        assert action.max_discharge_watts == 0
+
+    def test_opportunity_cost_decision_blocks_discharge(self):
+        """A decision tagged with the opportunity-cost grid-supplement reason
+        also triggers the block (same substring, different code path)."""
+        optimizer = _optimizer_for_tests()
+        appliance = _make_appliance(id="kona")
+        decisions = [self._decision(
+            "kona", Action.SET_CURRENT,
+            "Grid supplement (export solar at 0.080, buy grid at -0.137): 16.0A",
+        )]
+
+        action = optimizer._battery_discharge_protection(
+            decisions, [appliance],
+        )
+
+        assert action.should_limit is True
+        assert action.max_discharge_watts == 0
+
+    def test_cheap_tariff_overrules_big_consumer_override(self):
+        """When both triggers fire (grid-supplement decision + big-consumer
+        with positive override), the cheap-tariff branch wins because it
+        returns immediately with 0, never reaching the big-consumer aggregation.
+        """
+        optimizer = _optimizer_for_tests()
+        appliance = _make_appliance(
+            id="kona",
+            is_big_consumer=True,
+            battery_max_discharge_override=2000.0,
+        )
+        decisions = [self._decision(
+            "kona", Action.SET_CURRENT,
+            "Grid supplement (cheap-window target): 16.0A (...)",
+        )]
+
+        action = optimizer._battery_discharge_protection(
+            decisions, [appliance],
+        )
+
+        assert action.max_discharge_watts == 0, (
+            "cheap-tariff must overrule big-consumer override of 2000W"
+        )
+
+    def test_manual_force_charge_blocks_discharge(self):
+        """force_charge=True on its own (no grid-supplement decisions, no
+        auto-engaged) triggers the block."""
+        optimizer = _optimizer_for_tests()
+        appliance = _make_appliance(id="kona")
+        # SHED would have shed Kona under force_charge; simulate by using OFF.
+        decisions = [self._decision(
+            "kona", Action.OFF, "Shed: insufficient excess (priority 1)",
+        )]
+
+        action = optimizer._battery_discharge_protection(
+            decisions, [appliance], force_charge=True,
+        )
+
+        assert action.should_limit is True
+        assert action.max_discharge_watts == 0
+
+    def test_auto_grid_charge_engaged_blocks_discharge(self):
+        """auto_grid_charge_engaged=True on its own triggers the block."""
+        optimizer = _optimizer_for_tests()
+        decisions = []  # no appliances at all
+
+        action = optimizer._battery_discharge_protection(
+            decisions, [], auto_grid_charge_engaged=True,
+        )
+
+        assert action.should_limit is True
+        assert action.max_discharge_watts == 0
+
+    def test_no_triggers_no_discharge_block(self):
+        """No grid-supplement decisions, no force_charge, no auto-engaged →
+        no cheap-tariff block; existing big-consumer / no-limit paths apply."""
+        optimizer = _optimizer_for_tests()
+        appliance = _make_appliance(id="washer", is_big_consumer=False)
+        decisions = [self._decision(
+            "washer", Action.ON, "Excess available (1000W >= 500W needed)",
+        )]
+
+        action = optimizer._battery_discharge_protection(
+            decisions, [appliance],
+        )
+
+        # No big consumer, no triggers → no limit
+        assert action.should_limit is False
+
+    def test_cheap_tariff_does_not_shed_appliances(self):
+        """Discharge block writes max_discharge=0 but leaves decisions intact —
+        unlike SoC-protection, no Action.OFF is inserted."""
+        optimizer = _optimizer_for_tests()
+        appliance = _make_appliance(id="kona")
+        decisions = [self._decision(
+            "kona", Action.SET_CURRENT,
+            "Grid supplement (cheap-window target): 16.0A (...)",
+        )]
+        decisions_before = list(decisions)  # snapshot
+
+        optimizer._battery_discharge_protection(
+            decisions, [appliance],
+        )
+
+        # Phase 4 should NOT have replaced any decision with Action.OFF.
+        assert decisions == decisions_before, (
+            "cheap-tariff branch must not shed appliances"
+        )
+
+    def test_soc_protection_takes_priority_over_cheap_tariff(self):
+        """SoC<min still wins over cheap-tariff: max_discharge=0 AND appliances
+        get shed (existing safety behaviour preserved)."""
+        optimizer = _optimizer_for_tests()
+        appliance = _make_appliance(
+            id="kona",
+            is_big_consumer=False,  # standard appliance, eligible for shed
+            on_only=False,
+        )
+        decisions = [self._decision(
+            "kona", Action.SET_CURRENT,
+            "Grid supplement (cheap-window target): 16.0A (...)",
+        )]
+
+        action = optimizer._battery_discharge_protection(
+            decisions, [appliance],
+            battery_soc=5.0,
+            min_battery_soc=10.0,
+            force_charge=True,  # cheap-tariff trigger ALSO active
+        )
+
+        assert action.should_limit is True
+        assert action.max_discharge_watts == 0
+        # SoC-protection sheds → decision was replaced with Action.OFF.
+        assert decisions[0].action == Action.OFF
+        assert "Battery SoC protection" in decisions[0].reason
+

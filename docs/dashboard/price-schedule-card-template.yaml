@@ -1,0 +1,295 @@
+# ============================================================================
+# PV Excess Control — Energy Price & Schedule Cards (Generic Template)
+# ============================================================================
+#
+# Two apexcharts-card cards that overlay electricity prices (columns) with
+# planned appliance schedules (color-coded step-lines) from PV Excess Control.
+#
+# HOW TO ADAPT:
+#
+#   1. Replace YOUR_PRICE_SENSOR with your electricity price sensor entity ID.
+#      The data_generator expects a "rates" attribute containing a list of:
+#        { "start": "<ISO>", "end": "<ISO>", "value_inc_vat": <float> }
+#      This works with Octopus Energy. For other tariff providers, adjust the
+#      attribute name and value field in the data_generator (see comments).
+#
+#   2. For each appliance, duplicate one of the appliance series blocks and
+#      change:
+#        - name:              your appliance name (as configured in PV Excess Control)
+#        - color:             a distinct hex color
+#        - const name = '…':  must match the appliance name exactly
+#        - const h = …:       the Y-position (use 0.8, 0.6, 0.4, 0.2, etc.)
+#
+#   3. Update the price axis label (€/kWh, ct/kWh, SEK/kWh, etc.)
+#
+# Prerequisites:
+#   - apexcharts-card installed via HACS (Frontend)
+#   - PV Excess Control integration with planner enabled
+#   - A tariff provider configured that exposes price windows in sensor attributes
+#
+# Tariff provider notes:
+#   - Octopus Energy: uses "rates" attribute with "value_inc_vat" field (default)
+#   - Tibber:         uses "today" / "tomorrow" attributes with "total" field
+#   - Nordpool:       uses "raw_today" / "raw_tomorrow" with "value" field
+#   - aWATTar:        uses "prices" attribute with "price" field
+#   For Tibber/Nordpool, you'll need to adjust the data_generator — see the
+#   inline comments marked "TARIFF ADAPTER".
+#
+# ============================================================================
+
+# ---------- TODAY ----------
+
+- type: custom:apexcharts-card
+  graph_span: 1d
+  header:
+    show: true
+    title: Energy Price & Schedule (Today)
+  span:
+    start: day
+  now:
+    show: true
+    label: Now
+  series:
+    # ── Electricity price columns ──────────────────────────────────────────
+    #
+    # TARIFF ADAPTER: This data_generator works with Octopus Energy's "rates"
+    # attribute. For other providers, change:
+    #   - Tibber:   entity.attributes.today → field: entry.total
+    #   - Nordpool: entity.attributes.raw_today → field: entry.value
+    #   - aWATTar:  entity.attributes.prices → field: entry.price
+    #   - Generic:  entity.attributes.price_windows → field: entry.price
+    #
+    - entity: sensor.YOUR_PRICE_SENSOR                  # <- CHANGE
+      name: Price
+      type: column
+      yaxis_id: price
+      float_precision: 4
+      data_generator: |
+        const rates = entity.attributes.rates || [];
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(today);
+        todayEnd.setDate(todayEnd.getDate() + 1);
+        return rates
+          .filter(r => {
+            const s = new Date(r.start);
+            return s >= today && s < todayEnd;
+          })
+          .map(r => [new Date(r.start).getTime(), r.value_inc_vat]);
+
+    # ── Appliance 1 ───────────────────────────────────────────────────────
+    # Duplicate this block for each appliance. Change name, color, and height.
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: My Appliance 1                              # <- CHANGE
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#FF5733'                                   # <- CHANGE color
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'My Appliance 1';                   // <- CHANGE to match your appliance name
+        const h = 0.8;                                   // <- CHANGE height (0.8, 0.6, 0.4, 0.2, ...)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const ms = today.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+    # ── Appliance 2 ───────────────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: My Appliance 2                              # <- CHANGE
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#33C4FF'                                   # <- CHANGE color
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'My Appliance 2';                   // <- CHANGE to match your appliance name
+        const h = 0.6;                                   // <- CHANGE height
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const ms = today.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+  apex_config:
+    plotOptions:
+      bar:
+        columnWidth: 70%
+    xaxis:
+      type: datetime
+      tickAmount: 12
+      labels:
+        datetimeUTC: false
+    tooltip:
+      shared: false
+    legend:
+      show: true
+      position: bottom
+  yaxis:
+    - id: price
+      min: 0
+      apex_config:
+        title:
+          text: €/kWh                                   # <- CHANGE currency
+        forceNiceScale: true
+    - id: schedules
+      show: false
+      opposite: true
+      max: 1
+      min: 0
+
+
+# ---------- TOMORROW ----------
+
+- type: custom:apexcharts-card
+  graph_span: 1d
+  header:
+    show: true
+    title: Energy Price & Schedule (Tomorrow)
+  span:
+    start: day
+    offset: +1d
+  series:
+    # ── Electricity price columns ──────────────────────────────────────────
+    - entity: sensor.YOUR_PRICE_SENSOR                  # <- CHANGE
+      name: Price
+      type: column
+      yaxis_id: price
+      float_precision: 4
+      data_generator: |
+        const rates = entity.attributes.rates || [];
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        const tomorrowEnd = new Date(tomorrow);
+        tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
+        return rates
+          .filter(r => {
+            const s = new Date(r.start);
+            return s >= tomorrow && s < tomorrowEnd;
+          })
+          .map(r => [new Date(r.start).getTime(), r.value_inc_vat]);
+
+    # ── Appliance 1 ───────────────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: My Appliance 1                              # <- CHANGE
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#FF5733'                                   # <- CHANGE color
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'My Appliance 1';                   // <- CHANGE
+        const h = 0.8;                                   // <- CHANGE height
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        const ms = tomorrow.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+    # ── Appliance 2 ───────────────────────────────────────────────────────
+    - entity: sensor.pv_excess_control_plan_confidence
+      name: My Appliance 2                              # <- CHANGE
+      type: line
+      curve: stepline
+      stroke_width: 3
+      color: '#33C4FF'                                   # <- CHANGE color
+      yaxis_id: schedules
+      data_generator: |
+        const entries = entity.attributes.plan_entries || [];
+        const name = 'My Appliance 2';                   // <- CHANGE
+        const h = 0.6;                                   // <- CHANGE height
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        const ms = tomorrow.getTime();
+        const dayEnd = ms + 86400000;
+        const active = new Set();
+        entries.forEach(e => {
+          if (e.appliance_name === name && e.window_start
+              && (e.action === 'on' || e.action === 'set_current')) {
+            const t = new Date(e.window_start).getTime();
+            if (t >= ms && t < dayEnd) active.add(t);
+          }
+        });
+        const pts = [];
+        for (let i = 0; i < 96; i++) {
+          const t = ms + i * 900000;
+          pts.push([t, active.has(t) ? h : 0]);
+        }
+        pts.push([dayEnd, 0]);
+        return pts;
+
+  apex_config:
+    plotOptions:
+      bar:
+        columnWidth: 70%
+    xaxis:
+      type: datetime
+      tickAmount: 12
+      labels:
+        datetimeUTC: false
+    tooltip:
+      shared: false
+    legend:
+      show: true
+      position: bottom
+  yaxis:
+    - id: price
+      min: 0
+      apex_config:
+        title:
+          text: €/kWh                                   # <- CHANGE currency
+        forceNiceScale: true
+    - id: schedules
+      show: false
+      opposite: true
+      max: 1
+      min: 0

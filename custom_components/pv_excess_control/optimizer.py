@@ -62,6 +62,9 @@ class Optimizer:
         self.enable_preemption = enable_preemption
         self._off_threshold = off_threshold
         self._min_good_samples = min_good_samples
+        # Initialised here for safety; optimize() overwrites both on every cycle.
+        self._plan_influence: str = "none"
+        self._grid_supplement_count: int = 0
 
     def optimize(
         self,
@@ -74,6 +77,7 @@ class Optimizer:
         plan_influence: str = "none",
         min_battery_soc: float | None = None,
         force_charge: bool = False,
+        auto_grid_charge_engaged: bool = False,
     ) -> OptimizerResult:
         """Run the optimization cycle and return decisions.
 
@@ -131,6 +135,8 @@ class Optimizer:
                 sorted_appliances=sorted_appliances,
                 power_state=power_state,
                 min_battery_soc=min_battery_soc,
+                force_charge=force_charge,
+                auto_grid_charge_engaged=auto_grid_charge_engaged,
             )
 
         # Pre-compute per-appliance averaged excess for those with custom windows.
@@ -229,6 +235,8 @@ class Optimizer:
             decisions, sorted_appliances,
             battery_soc=power_state.battery_soc,
             min_battery_soc=min_battery_soc,
+            force_charge=force_charge,
+            auto_grid_charge_engaged=auto_grid_charge_engaged,
         )
 
         return OptimizerResult(
@@ -560,6 +568,9 @@ class Optimizer:
         sorted_appliances: list[ApplianceConfig],
         power_state: PowerState,
         min_battery_soc: float | None,
+        *,
+        force_charge: bool = False,
+        auto_grid_charge_engaged: bool = False,
     ) -> OptimizerResult:
         """Run safety checks and Phase 4 only; skip Phase 2/2.5/3.
 
@@ -609,6 +620,8 @@ class Optimizer:
             decisions, sorted_appliances,
             battery_soc=power_state.battery_soc,
             min_battery_soc=min_battery_soc,
+            force_charge=force_charge,
+            auto_grid_charge_engaged=auto_grid_charge_engaged,
         )
 
         _LOGGER.info(
@@ -692,8 +705,18 @@ class Optimizer:
                 raw_amps = available / (self.grid_voltage * phases)
                 target_amps = _step_floor(raw_amps, appliance.current_step)
 
-                if target_amps < appliance.min_current:
-                    # Not enough for minimum current - SHED will handle turning off
+                # Compute cheap-window override BEFORE the "below min_current"
+                # early-return so a configured override keeps the appliance
+                # running through transient negative-budget cycles instead of
+                # falling back to a SHED-eligible "staying on" decision.
+                override_amps = self._cheap_window_target_amps(appliance, tariff, phases)
+                override_active = (
+                    override_amps is not None
+                    and override_amps > max(target_amps, appliance.min_current)
+                )
+
+                if target_amps < appliance.min_current and not override_active:
+                    # Not enough for minimum current and no override - SHED will handle turning off
                     reason = _format_staying_on_dynamic(
                         current_amperage=state.current_amperage,
                         current_power=current_power,
@@ -712,11 +735,32 @@ class Optimizer:
                     )
 
                 target_amps = max(appliance.min_current, min(target_amps, appliance.max_current))
+                if override_active:
+                    target_amps = override_amps  # already capped by helper
                 power_at_target = target_amps * self.grid_voltage * phases
-                # Deduct only the CHANGE in power (new target minus current).
-                # If increasing, this is positive (uses more excess budget).
-                # If decreasing, this is negative (frees excess budget).
                 power_delta = power_at_target - current_power
+                if override_active:
+                    # Override drives target above natural solar-supportable amps; the
+                    # extra portion comes from grid. Tag the reason so SHED's
+                    # grid-supplement guard skips this decision, and only deduct the
+                    # solar-supportable delta from the budget so other appliances
+                    # are not collateral-shed.
+                    natural_power = available  # excess_for_adjustment + current_power
+                    solar_delta = max(natural_power - current_power, 0.0)
+                    reason = (
+                        f"Grid supplement (cheap-window target): {target_amps:.1f}A "
+                        f"({power_at_target:.0f}W, {available:.0f}W solar-supportable)"
+                    )
+                    return (
+                        ControlDecision(
+                            appliance_id=appliance.id,
+                            action=Action.SET_CURRENT,
+                            target_current=target_amps,
+                            reason=reason,
+                            overrides_plan=False,
+                        ),
+                        solar_delta,
+                    )
                 return (
                     ControlDecision(
                         appliance_id=appliance.id,
@@ -759,14 +803,21 @@ class Optimizer:
         ):
             self._grid_supplement_count += 1
             if appliance.dynamic_current and appliance.current_entity:
+                # If the appliance has a cheap-window target current configured
+                # AND this tariff qualifies as cheap for the appliance, use the
+                # override target instead of min_current. Otherwise default to
+                # min_current as before.
+                phases = max(appliance.phases, 1)
+                override_amps = self._cheap_window_target_amps(appliance, tariff, phases)
+                target_amps = override_amps if override_amps is not None else appliance.min_current
                 return (
                     ControlDecision(
                         appliance_id=appliance.id,
                         action=Action.SET_CURRENT,
-                        target_current=appliance.min_current,
+                        target_current=target_amps,
                         reason=(
                             f"Grid supplement (export solar at {tariff.feed_in_tariff:.3f}, "
-                            f"buy grid at {tariff.current_price:.3f})"
+                            f"buy grid at {tariff.current_price:.3f}): {target_amps:.1f}A"
                         ),
                         overrides_plan=False,
                     ),
@@ -875,7 +926,7 @@ class Optimizer:
         # is intentionally imported and should not make avg_budget negative.
         if (
             appliance.allow_grid_supplement
-            and self._is_cheap_tariff(tariff)
+            and self._is_cheap_for_appliance(tariff, appliance)
         ):
             max_grid = appliance.max_grid_power if appliance.max_grid_power is not None else appliance.nominal_power
             solar_portion = max(avg_budget, 0.0)
@@ -891,6 +942,7 @@ class Optimizer:
                         overrides_plan=False,
                     )
                     grid_power_consumed = solar_portion + dep_power
+                effective_threshold = appliance.cheap_price_threshold if appliance.cheap_price_threshold is not None else tariff.cheap_price_threshold
                 return (
                     ControlDecision(
                         appliance_id=appliance.id,
@@ -899,7 +951,7 @@ class Optimizer:
                         reason=(
                             f"Grid supplement: {grid_supplement_needed:.0f}W from grid "
                             f"(tariff {tariff.current_price:.3f} <= "
-                            f"threshold {tariff.cheap_price_threshold:.3f})"
+                            f"threshold {effective_threshold:.3f})"
                         ),
                         overrides_plan=False,
                     ),
@@ -941,6 +993,7 @@ class Optimizer:
                         target_current=None,
                         reason=reason,
                         overrides_plan=False,
+                        bypasses_cooldown=True,
                     ),
                     appliance.nominal_power,
                 )
@@ -998,21 +1051,31 @@ class Optimizer:
             # Not enough excess — try grid supplementation if tariff is cheap
             if (
                 appliance.allow_grid_supplement
-                and self._is_cheap_tariff(tariff)
+                and self._is_cheap_for_appliance(tariff, appliance)
             ):
-                # Start at minimum current, grid supplements the shortfall
-                min_power = appliance.min_current * self.grid_voltage * phases
+                override_amps = self._cheap_window_target_amps(appliance, tariff, phases)
+                target_amps = override_amps if override_amps is not None else appliance.min_current
+                target_power = target_amps * self.grid_voltage * phases
                 solar_portion = max(avg_budget, 0.0)
+                effective_threshold = appliance.cheap_price_threshold if appliance.cheap_price_threshold is not None else tariff.cheap_price_threshold
+                if override_amps is not None:
+                    reason = (
+                        f"Grid supplement (cheap-window target): {target_amps:.1f}A "
+                        f"({target_power:.0f}W, {solar_portion:.0f}W solar, "
+                        f"tariff {tariff.current_price:.3f} <= threshold {effective_threshold:.3f})"
+                    )
+                else:
+                    reason = (
+                        f"Grid supplement: dynamic current at {target_amps:.0f}A "
+                        f"({target_power:.0f}W, {solar_portion:.0f}W solar, "
+                        f"tariff {tariff.current_price:.3f} <= threshold {effective_threshold:.3f})"
+                    )
                 return (
                     ControlDecision(
                         appliance_id=appliance.id,
                         action=Action.SET_CURRENT,
-                        target_current=appliance.min_current,
-                        reason=(
-                            f"Grid supplement: dynamic current at {appliance.min_current:.0f}A "
-                            f"({min_power:.0f}W, {solar_portion:.0f}W solar, "
-                            f"tariff {tariff.current_price:.3f})"
-                        ),
+                        target_current=target_amps,
+                        reason=reason,
                         overrides_plan=False,
                     ),
                     solar_portion,  # Only deduct solar portion from excess budget
@@ -1051,6 +1114,7 @@ class Optimizer:
                             target_current=appliance.min_current,
                             reason=reason,
                             overrides_plan=False,
+                            bypasses_cooldown=True,
                         ),
                         min_power,
                     )
@@ -1074,8 +1138,33 @@ class Optimizer:
         raw_amps = avg_budget / (self.grid_voltage * phases)
         clamped_amps = _step_floor(raw_amps, appliance.current_step)
 
-        target_amps = max(appliance.min_current, min(clamped_amps, appliance.max_current))
+        natural_target_amps = max(appliance.min_current, min(clamped_amps, appliance.max_current))
+
+        override_amps = self._cheap_window_target_amps(appliance, tariff, phases)
+        override_active = override_amps is not None and override_amps > natural_target_amps
+        target_amps = override_amps if override_active else natural_target_amps
+
         power_consumed = target_amps * self.grid_voltage * phases
+
+        if override_active:
+            # Override drives target above natural solar-supportable amps; the extra
+            # portion comes from grid. Tag the reason so SHED's grid-supplement guard
+            # skips this decision, and only deduct the solar-supportable amperage from
+            # the budget so other appliances are not collateral-shed.
+            natural_power = natural_target_amps * self.grid_voltage * phases
+            return (
+                ControlDecision(
+                    appliance_id=appliance.id,
+                    action=Action.SET_CURRENT,
+                    target_current=target_amps,
+                    reason=(
+                        f"Grid supplement (cheap-window target): {target_amps:.1f}A "
+                        f"({power_consumed:.0f}W, {natural_power:.0f}W solar)"
+                    ),
+                    overrides_plan=False,
+                ),
+                natural_power,
+            )
 
         return (
             ControlDecision(
@@ -1096,6 +1185,51 @@ class Optimizer:
     def _is_cheap_tariff(tariff: TariffInfo) -> bool:
         """Return True if the current tariff qualifies as cheap."""
         return tariff.current_price <= tariff.cheap_price_threshold
+
+    @staticmethod
+    def _is_cheap_for_appliance(tariff: TariffInfo, appliance: ApplianceConfig) -> bool:
+        """Return True if the current tariff is cheap for this specific appliance."""
+        threshold = (
+            appliance.cheap_price_threshold
+            if appliance.cheap_price_threshold is not None
+            else tariff.cheap_price_threshold
+        )
+        return tariff.current_price <= threshold
+
+    def _cheap_window_target_amps(
+        self,
+        appliance: ApplianceConfig,
+        tariff: TariffInfo,
+        phases: int,
+    ) -> float | None:
+        """Return the cheap-window target amps for a dynamic-current appliance.
+
+        Returns None when:
+        - cheap_grid_target_current is unset, or
+        - allow_grid_supplement is False, or
+        - the current tariff is not cheap for this appliance.
+
+        The result is computed in three steps:
+        (1) raise to at least min_current;
+        (2) cap by max_grid_power (when set) and max_current — when max_grid_power
+            is tighter than min_current * grid_voltage * phases, this cap can drive
+            the result below min_current;
+        (3) floor to current_step.
+        """
+        if appliance.cheap_grid_target_current is None:
+            return None
+        if not appliance.allow_grid_supplement:
+            return None
+        if not self._is_cheap_for_appliance(tariff, appliance):
+            return None
+
+        cap_amps = appliance.max_current
+        if appliance.max_grid_power is not None:
+            cap_amps = min(cap_amps, appliance.max_grid_power / (self.grid_voltage * phases))
+
+        target_amps = max(appliance.cheap_grid_target_current, appliance.min_current)
+        target_amps = min(target_amps, cap_amps)
+        return _step_floor(target_amps, appliance.current_step)
 
     # ------------------------------------------------------------------
     # Time window helpers
@@ -1371,6 +1505,7 @@ class Optimizer:
         - Never shed on_only appliances
         - Never shed manually overridden appliances
         - Never shed grid-supplemented appliances
+        - Never shed bypasses_cooldown decisions (deadline must-run)
         - Never shed a dependency while any of its dependents are running
         - Reduce dynamic current before turning off
         - Prefer shedding appliances that have met their min_daily_runtime
@@ -1405,6 +1540,9 @@ class Optimizer:
                 continue
             # Never shed manually overridden appliances
             if appliance.override_active:
+                continue
+            # Never shed deadline-forced or other cooldown-bypassing decisions
+            if decision.bypasses_cooldown:
                 continue
             # Skip grid-supplemented appliances (they consume from grid, not solar)
             if "grid supplement" in decision.reason.lower():
@@ -1551,17 +1689,26 @@ class Optimizer:
         appliances: list[ApplianceConfig],
         battery_soc: float | None = None,
         min_battery_soc: float | None = None,
+        *,
+        force_charge: bool = False,
+        auto_grid_charge_engaged: bool = False,
     ) -> BatteryDischargeAction:
-        """Phase 4: Limit battery discharge when big consumers are active or SoC is too low.
+        """Phase 4: Limit battery discharge when battery is at risk or grid is preferred.
 
-        Two independent protections:
-        1. SoC-based: When battery_soc < min_battery_soc, shed all shedable
-           appliances and prevent all discharge (max_discharge_watts=0).
-        2. Big-consumer-based: If any big consumer is actively ON (or SET_CURRENT),
+        Three independent protections, evaluated in priority order:
+        1. SoC-based (safety): When battery_soc < min_battery_soc, shed all
+           shedable appliances and prevent all discharge (max_discharge_watts=0).
+        2. Cheap-tariff / grid-import: When the integration is in any flavour
+           of grid-import mode (any per-cycle decision tagged "grid supplement",
+           OR manual force_charge switch ON, OR auto-grid-charge engaged), block
+           all discharge. No appliance shedding — we want loads to run on cheap
+           grid, not be turned off.
+        3. Big-consumer-based: If any big consumer is actively ON (or SET_CURRENT),
            set the battery max discharge to the lowest battery_max_discharge_override
            among active big consumers.
 
-        SoC-based protection takes priority since it is a safety mechanism.
+        SoC-based protection takes priority. Cheap-tariff overrules big-consumer
+        because 0 is the most restrictive value.
         """
         appliance_by_id: dict[str, ApplianceConfig] = {
             a.id: a for a in appliances
@@ -1630,6 +1777,44 @@ class Optimizer:
                     bypasses_cooldown=True,
                 )
 
+            return BatteryDischargeAction(
+                should_limit=True,
+                max_discharge_watts=0,
+            )
+
+        # --- Cheap-tariff / grid-import discharge block ---
+        # Block all discharge when the integration is in any "grid-import mode":
+        # (a) any per-cycle decision tagged "grid supplement" (cheap-window
+        #     override OR opportunity-cost path produce this tag);
+        # (b) the manual force_charge switch is ON;
+        # (c) the auto-grid-charge state machine is engaged.
+        # Returns immediately with max_discharge_watts=0; this naturally overrules
+        # any big-consumer override (since 0 is the smallest possible value).
+        # Does NOT shed appliances — loads should run on cheap grid.
+        grid_supplement_decisions = [
+            d for d in decisions
+            if d.action in (Action.ON, Action.SET_CURRENT)
+            and "grid supplement" in d.reason.lower()
+        ]
+        if grid_supplement_decisions or force_charge or auto_grid_charge_engaged:
+            if grid_supplement_decisions:
+                names = [
+                    appliance_by_id[d.appliance_id].name
+                    for d in grid_supplement_decisions
+                    if d.appliance_id in appliance_by_id
+                ]
+                _LOGGER.info(
+                    "Battery discharge blocked: grid-supplemented appliances active (%s)",
+                    ", ".join(names) if names else "?",
+                )
+            elif force_charge:
+                _LOGGER.info(
+                    "Battery discharge blocked: manual force_charge switch ON",
+                )
+            else:
+                _LOGGER.info(
+                    "Battery discharge blocked: auto-grid-charge engaged",
+                )
             return BatteryDischargeAction(
                 should_limit=True,
                 max_discharge_watts=0,

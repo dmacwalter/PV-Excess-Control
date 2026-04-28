@@ -157,10 +157,12 @@ class PvPlanConfidenceSensor(PvExcessBaseSensor):
         plan = data.get("current_plan")
         if plan is None or not plan.entries:
             return None
+        configs = data.get("appliance_configs") or {}
         entries = []
-        for entry in plan.entries[:20]:  # Limit to avoid huge attributes
+        for entry in plan.entries:
             e: dict[str, Any] = {
                 "appliance_id": entry.appliance_id,
+                "appliance_name": configs[entry.appliance_id].name if entry.appliance_id in configs else entry.appliance_id,
                 "action": entry.action.value if hasattr(entry.action, 'value') else str(entry.action),
                 "reason": entry.reason,
             }

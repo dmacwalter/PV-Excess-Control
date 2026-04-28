@@ -210,6 +210,8 @@ def _make_coordinator(
     coord.appliance_enabled = {}
     coord.appliance_overrides = {}
     coord.appliance_priorities = {}
+    coord.appliance_min_daily_runtime = {}
+    coord.appliance_max_daily_runtime = {}
     coord.battery_strategy = entry.data.get(
         CONF_BATTERY_STRATEGY, BatteryStrategy.BALANCED
     )
@@ -224,6 +226,14 @@ def _make_coordinator(
     coord._needed_by_others = set()
     coord._previous_is_on = {}
     coord._was_enabled = True
+
+    # Inverter forced grid-charge state machine fields
+    coord._inverter_ctl = None
+    coord._grid_charge_engaged = entry.data.get("_grid_charge_engaged", False)
+    coord._grid_charge_engage_ts = None
+    coord._force_charge_prev = False
+    coord._latest_tariff = None
+    coord._latest_power_state = None
 
     tariff_type = entry.data.get(CONF_TARIFF_PROVIDER, TariffProviderEnum.NONE)
     coord._tariff_provider = create_tariff_provider(tariff_type, "")

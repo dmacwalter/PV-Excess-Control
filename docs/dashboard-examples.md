@@ -449,7 +449,19 @@ apex_config:
 
 ---
 
-## 6. Plan Timeline
+## 6. Plan Timeline & Price Schedule
+
+### Price & Schedule Chart
+
+Overlays electricity prices (columns) with planned appliance activity (color-coded step-lines). Each appliance gets its own line at a distinct height so they're visually separable.
+
+This chart uses the `plan_entries` attribute on `sensor.pv_excess_control_plan_confidence`, which includes `appliance_name`, `action`, `reason`, `window_start`, and `window_end` for each planned 15-minute slot.
+
+> **Ready-to-use YAML files:**
+> - [`price-schedule-card-template.yaml`](dashboard/price-schedule-card-template.yaml) — generic template with `# <- CHANGE` markers
+> - [`price-schedule-card-example.yaml`](dashboard/price-schedule-card-example.yaml) — concrete example with 4 appliances and Octopus Energy pricing
+
+### Plan Timeline (Range Bars)
 
 Visualizes the planner's scheduled actions as range bars. Plan entries are read from the `plan_entries` attribute on `sensor.pv_excess_control_plan_confidence`.
 
@@ -474,7 +486,7 @@ series:
       const entries = entity.attributes.plan_entries || [];
       return entries
         .filter(e =>
-          e.appliance_id === 'ev_charger' &&
+          e.appliance_name === 'EV Charger' &&
           e.window_start && e.window_end &&
           (e.action === 'on' || e.action === 'set_current')
         )
@@ -494,7 +506,7 @@ series:
       const entries = entity.attributes.plan_entries || [];
       return entries
         .filter(e =>
-          e.appliance_id === 'heat_pump' &&
+          e.appliance_name === 'Heat Pump' &&
           e.window_start && e.window_end &&
           (e.action === 'on' || e.action === 'set_current')
         )
@@ -514,7 +526,7 @@ series:
       const entries = entity.attributes.plan_entries || [];
       return entries
         .filter(e =>
-          e.appliance_id === 'dishwasher' &&
+          e.appliance_name === 'Dishwasher' &&
           e.window_start && e.window_end &&
           (e.action === 'on' || e.action === 'set_current')
         )

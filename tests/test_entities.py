@@ -30,6 +30,8 @@ def _make_coordinator(
     appliance_enabled: dict | None = None,
     appliance_overrides: dict | None = None,
     appliance_priorities: dict | None = None,
+    appliance_min_daily_runtime: dict | None = None,
+    appliance_max_daily_runtime: dict | None = None,
     coordinator_data: dict | None = None,
 ) -> MagicMock:
     """Return a mock PvExcessCoordinator."""
@@ -44,6 +46,12 @@ def _make_coordinator(
     coord.appliance_enabled = appliance_enabled if appliance_enabled is not None else {}
     coord.appliance_overrides = appliance_overrides if appliance_overrides is not None else {}
     coord.appliance_priorities = appliance_priorities if appliance_priorities is not None else {}
+    coord.appliance_min_daily_runtime = (
+        appliance_min_daily_runtime if appliance_min_daily_runtime is not None else {}
+    )
+    coord.appliance_max_daily_runtime = (
+        appliance_max_daily_runtime if appliance_max_daily_runtime is not None else {}
+    )
 
     # async_request_refresh returns a coroutine (kept for compatibility)
     coord.async_request_refresh = AsyncMock()
@@ -319,6 +327,590 @@ class TestNumberEntities:
         coord = _make_coordinator()
         num = AppliancePriorityNumber(coord, "app_1", "Washing Machine")
         assert num.name == "Washing Machine Priority"
+
+    def test_min_daily_runtime_resolution_prefers_runtime_dict(self):
+        """When runtime dict has an override, it wins over sub_data."""
+        appliance_min_daily_runtime = {"app_1": 45}
+        sub_data = {"min_daily_runtime": 30}
+        resolved = appliance_min_daily_runtime.get(
+            "app_1", sub_data.get("min_daily_runtime")
+        )
+        assert resolved == 45
+
+    def test_min_daily_runtime_resolution_falls_through_to_sub_data(self):
+        """When runtime dict has no entry, sub_data wins."""
+        appliance_min_daily_runtime: dict[str, int | None] = {}
+        sub_data = {"min_daily_runtime": 30}
+        resolved = appliance_min_daily_runtime.get(
+            "app_1", sub_data.get("min_daily_runtime")
+        )
+        assert resolved == 30
+
+    def test_min_daily_runtime_resolution_none_when_nothing_set(self):
+        """When neither source has a value, resolves to None (disabled)."""
+        appliance_min_daily_runtime: dict[str, int | None] = {}
+        sub_data: dict = {}
+        resolved = appliance_min_daily_runtime.get(
+            "app_1", sub_data.get("min_daily_runtime")
+        )
+        assert resolved is None
+
+    def test_min_daily_runtime_resolution_none_override_wins(self):
+        """When runtime dict has an explicit None (user disabled via Number entity),
+        it wins over a value still in sub_data."""
+        appliance_min_daily_runtime = {"app_1": None}
+        sub_data = {"min_daily_runtime": 30}
+        resolved = appliance_min_daily_runtime.get(
+            "app_1", sub_data.get("min_daily_runtime")
+        )
+        assert resolved is None
+
+    def test_max_daily_runtime_resolution_prefers_runtime_dict(self):
+        """When runtime dict has an override, it wins over sub_data."""
+        appliance_max_daily_runtime = {"app_1": 240}
+        sub_data = {"max_daily_runtime": 180}
+        resolved = appliance_max_daily_runtime.get(
+            "app_1", sub_data.get("max_daily_runtime")
+        )
+        assert resolved == 240
+
+    def test_max_daily_runtime_resolution_falls_through_to_sub_data(self):
+        """When runtime dict has no entry, sub_data wins."""
+        appliance_max_daily_runtime: dict[str, int | None] = {}
+        sub_data = {"max_daily_runtime": 180}
+        resolved = appliance_max_daily_runtime.get(
+            "app_1", sub_data.get("max_daily_runtime")
+        )
+        assert resolved == 180
+
+    def test_max_daily_runtime_resolution_none_when_nothing_set(self):
+        """When neither source has a value, resolves to None (disabled)."""
+        appliance_max_daily_runtime: dict[str, int | None] = {}
+        sub_data: dict = {}
+        resolved = appliance_max_daily_runtime.get(
+            "app_1", sub_data.get("max_daily_runtime")
+        )
+        assert resolved is None
+
+    def test_max_daily_runtime_resolution_none_override_wins(self):
+        """When runtime dict has an explicit None (user disabled via Number entity),
+        it wins over a value still in sub_data."""
+        appliance_max_daily_runtime = {"app_1": None}
+        sub_data = {"max_daily_runtime": 180}
+        resolved = appliance_max_daily_runtime.get(
+            "app_1", sub_data.get("max_daily_runtime")
+        )
+        assert resolved is None
+
+    def test_min_daily_runtime_number_range(self):
+        """ApplianceMinDailyRuntimeNumber has range 0-1440 step 1, unit 'min'."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator()
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.native_min_value == 0.0
+        assert num.native_max_value == 1440.0
+        assert num.native_step == 1.0
+        assert num.native_unit_of_measurement == "min"
+
+    def test_min_daily_runtime_number_reads_runtime_dict(self):
+        """native_value reads coordinator.appliance_min_daily_runtime."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_min_daily_runtime={"app_1": 45})
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.native_value == 45.0
+
+    def test_min_daily_runtime_number_returns_zero_when_none(self):
+        """native_value returns 0.0 when the runtime-dict entry is None (disabled)."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_min_daily_runtime={"app_1": None})
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.native_value == 0.0
+
+    def test_min_daily_runtime_number_returns_zero_when_missing(self):
+        """native_value returns 0.0 when no entry is present (unset)."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_min_daily_runtime={})
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.native_value == 0.0
+
+    def test_min_daily_runtime_number_unique_id(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator()
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.unique_id == "test_entry_id_app_1_min_daily_runtime"
+
+    def test_min_daily_runtime_number_name(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator()
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.name == "Pool Pump Min Daily Runtime"
+
+    def test_min_daily_runtime_number_icon(self):
+        """ApplianceMinDailyRuntimeNumber uses the timer-sand icon."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator()
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.icon == "mdi:timer-sand"
+
+    @pytest.mark.asyncio
+    async def test_set_min_daily_runtime_writes_runtime_dict(self):
+        """Setting a positive value updates the runtime dict with that int."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_min_daily_runtime={})
+        coord.config_entry.subentries = {}
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(45.0)
+
+        assert coord.appliance_min_daily_runtime["app_1"] == 45
+        num.async_write_ha_state.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_set_min_daily_runtime_zero_stores_none(self):
+        """Setting 0 stores None (disabled sentinel)."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_min_daily_runtime={"app_1": 60})
+        coord.config_entry.subentries = {}
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(0.0)
+
+        assert coord.appliance_min_daily_runtime["app_1"] is None
+
+    @pytest.mark.asyncio
+    async def test_set_min_daily_runtime_persists_positive_to_subentry(self):
+        """Setting a positive value calls async_update_subentry with the key set."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_min_daily_runtime={})
+        subentry = MagicMock()
+        subentry.data = {"appliance_name": "Pool Pump"}
+        coord.config_entry.subentries = {"app_1": subentry}
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+        num.hass.config_entries.async_update_subentry = AsyncMock()
+
+        await num.async_set_native_value(45.0)
+
+        num.hass.config_entries.async_update_subentry.assert_awaited_once()
+        _, call_kwargs = num.hass.config_entries.async_update_subentry.call_args
+        assert call_kwargs["data"]["min_daily_runtime"] == 45
+
+    @pytest.mark.asyncio
+    async def test_set_min_daily_runtime_zero_pops_key_from_subentry(self):
+        """Setting 0 calls async_update_subentry with the key removed (not set to 0)."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_min_daily_runtime={"app_1": 60})
+        subentry = MagicMock()
+        subentry.data = {"appliance_name": "Pool Pump", "min_daily_runtime": 60}
+        coord.config_entry.subentries = {"app_1": subentry}
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+        num.hass.config_entries.async_update_subentry = AsyncMock()
+
+        await num.async_set_native_value(0.0)
+
+        num.hass.config_entries.async_update_subentry.assert_awaited_once()
+        _, call_kwargs = num.hass.config_entries.async_update_subentry.call_args
+        assert "min_daily_runtime" not in call_kwargs["data"]
+
+    def test_max_daily_runtime_number_range(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator()
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.native_min_value == 0.0
+        assert num.native_max_value == 1440.0
+        assert num.native_step == 1.0
+        assert num.native_unit_of_measurement == "min"
+
+    def test_max_daily_runtime_number_reads_runtime_dict(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_max_daily_runtime={"app_1": 240})
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.native_value == 240.0
+
+    def test_max_daily_runtime_number_returns_zero_when_none(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_max_daily_runtime={"app_1": None})
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.native_value == 0.0
+
+    def test_max_daily_runtime_number_returns_zero_when_missing(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_max_daily_runtime={})
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.native_value == 0.0
+
+    def test_max_daily_runtime_number_unique_id(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator()
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.unique_id == "test_entry_id_app_1_max_daily_runtime"
+
+    def test_max_daily_runtime_number_name(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator()
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.name == "Pool Pump Max Daily Runtime"
+
+    def test_max_daily_runtime_number_icon(self):
+        """ApplianceMaxDailyRuntimeNumber uses the timer-alert icon (not the min one)."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator()
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        assert num.icon == "mdi:timer-alert-outline"
+
+    @pytest.mark.asyncio
+    async def test_set_max_daily_runtime_writes_runtime_dict(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_max_daily_runtime={})
+        coord.config_entry.subentries = {}
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(240.0)
+
+        assert coord.appliance_max_daily_runtime["app_1"] == 240
+        num.async_write_ha_state.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_set_max_daily_runtime_zero_stores_none(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_max_daily_runtime={"app_1": 120})
+        coord.config_entry.subentries = {}
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(0.0)
+
+        assert coord.appliance_max_daily_runtime["app_1"] is None
+
+    @pytest.mark.asyncio
+    async def test_set_max_daily_runtime_persists_positive_to_subentry(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_max_daily_runtime={})
+        subentry = MagicMock()
+        subentry.data = {"appliance_name": "Pool Pump"}
+        coord.config_entry.subentries = {"app_1": subentry}
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+        num.hass.config_entries.async_update_subentry = AsyncMock()
+
+        await num.async_set_native_value(240.0)
+
+        num.hass.config_entries.async_update_subentry.assert_awaited_once()
+        _, call_kwargs = num.hass.config_entries.async_update_subentry.call_args
+        assert call_kwargs["data"]["max_daily_runtime"] == 240
+
+    @pytest.mark.asyncio
+    async def test_set_max_daily_runtime_zero_pops_key_from_subentry(self):
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(appliance_max_daily_runtime={"app_1": 120})
+        subentry = MagicMock()
+        subentry.data = {"appliance_name": "Pool Pump", "max_daily_runtime": 120}
+        coord.config_entry.subentries = {"app_1": subentry}
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+        num.hass.config_entries.async_update_subentry = AsyncMock()
+
+        await num.async_set_native_value(0.0)
+
+        num.hass.config_entries.async_update_subentry.assert_awaited_once()
+        _, call_kwargs = num.hass.config_entries.async_update_subentry.call_args
+        assert "max_daily_runtime" not in call_kwargs["data"]
+
+    @pytest.mark.asyncio
+    async def test_set_min_clamps_to_max_when_above(self):
+        """Setting min above current max silently clamps min down to max."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(
+            appliance_min_daily_runtime={"app_1": 30},
+            appliance_max_daily_runtime={"app_1": 60},
+        )
+        coord.config_entry.subentries = {}
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(120.0)
+
+        assert coord.appliance_min_daily_runtime["app_1"] == 60
+
+    @pytest.mark.asyncio
+    async def test_set_min_with_max_none_no_clamp(self):
+        """When max is None (unlimited), min is not clamped."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(
+            appliance_min_daily_runtime={},
+            appliance_max_daily_runtime={"app_1": None},
+        )
+        coord.config_entry.subentries = {}
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(500.0)
+
+        assert coord.appliance_min_daily_runtime["app_1"] == 500
+
+    @pytest.mark.asyncio
+    async def test_set_min_with_max_missing_no_clamp(self):
+        """When max has no entry anywhere, min is not clamped (treated as unlimited)."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMinDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(
+            appliance_min_daily_runtime={},
+            appliance_max_daily_runtime={},
+        )
+        coord.config_entry.subentries = {}
+        num = ApplianceMinDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(500.0)
+
+        assert coord.appliance_min_daily_runtime["app_1"] == 500
+
+    @pytest.mark.asyncio
+    async def test_set_max_below_min_lowers_min(self):
+        """Setting max below current min lowers min to match, then writes max."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(
+            appliance_min_daily_runtime={"app_1": 120},
+            appliance_max_daily_runtime={"app_1": 180},
+        )
+        coord.config_entry.subentries = {}
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(60.0)
+
+        assert coord.appliance_min_daily_runtime["app_1"] == 60
+        assert coord.appliance_max_daily_runtime["app_1"] == 60
+
+    @pytest.mark.asyncio
+    async def test_set_max_zero_does_not_touch_min(self):
+        """Setting max=0 (disable) with min=120: min stays 120 (None = unlimited)."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(
+            appliance_min_daily_runtime={"app_1": 120},
+            appliance_max_daily_runtime={"app_1": 180},
+        )
+        coord.config_entry.subentries = {}
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(0.0)
+
+        assert coord.appliance_min_daily_runtime["app_1"] == 120
+        assert coord.appliance_max_daily_runtime["app_1"] is None
+
+    @pytest.mark.asyncio
+    async def test_set_max_above_min_no_change_to_min(self):
+        """Setting max above current min leaves min alone."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(
+            appliance_min_daily_runtime={"app_1": 60},
+            appliance_max_daily_runtime={"app_1": 120},
+        )
+        coord.config_entry.subentries = {}
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(240.0)
+
+        assert coord.appliance_min_daily_runtime["app_1"] == 60
+        assert coord.appliance_max_daily_runtime["app_1"] == 240
+
+    @pytest.mark.asyncio
+    async def test_set_max_with_min_missing_no_sibling_lower(self):
+        """When no min is set anywhere, _effective_min returns None and sibling-lowering is skipped."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(
+            appliance_min_daily_runtime={},
+            appliance_max_daily_runtime={},
+        )
+        coord.config_entry.subentries = {}
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        await num.async_set_native_value(60.0)
+
+        assert "app_1" not in coord.appliance_min_daily_runtime
+        assert coord.appliance_max_daily_runtime["app_1"] == 60
+
+    @pytest.mark.asyncio
+    async def test_set_max_below_min_persists_lowered_min_to_subentry(self):
+        """Sibling-lowering calls async_update_subentry with the min key updated to the new lower value."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+        )
+
+        coord = _make_coordinator(
+            appliance_min_daily_runtime={"app_1": 120},
+            appliance_max_daily_runtime={"app_1": 180},
+        )
+        subentry = MagicMock()
+        subentry.data = {
+            "appliance_name": "Pool Pump",
+            "min_daily_runtime": 120,
+            "max_daily_runtime": 180,
+        }
+        coord.config_entry.subentries = {"app_1": subentry}
+        num = ApplianceMaxDailyRuntimeNumber(coord, "app_1", "Pool Pump")
+        num.async_write_ha_state = MagicMock()
+        num.hass = MagicMock()
+
+        # Simulate HA mutating subentry.data in place after each persist so
+        # the second persist reads the lowered min, mirroring real behaviour.
+        async def _fake_update(entry, sub, *, data):
+            sub.data = data
+
+        num.hass.config_entries.async_update_subentry = AsyncMock(side_effect=_fake_update)
+
+        await num.async_set_native_value(60.0)
+
+        # Called twice: once for min sibling, once for max self
+        assert num.hass.config_entries.async_update_subentry.await_count == 2
+        # The two calls, in order: min first, then max
+        min_call_kwargs = num.hass.config_entries.async_update_subentry.call_args_list[0].kwargs
+        max_call_kwargs = num.hass.config_entries.async_update_subentry.call_args_list[1].kwargs
+        assert min_call_kwargs["data"]["min_daily_runtime"] == 60
+        # Second call must carry the already-lowered min (guards against a
+        # bug where the max persist reads stale subentry.data).
+        assert max_call_kwargs["data"]["min_daily_runtime"] == 60
+        assert max_call_kwargs["data"]["max_daily_runtime"] == 60
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_adds_three_entities_per_subentry(self):
+        """async_setup_entry adds priority, min, and max entities for each subentry."""
+        from custom_components.pv_excess_control.number import (
+            ApplianceMaxDailyRuntimeNumber,
+            ApplianceMinDailyRuntimeNumber,
+            AppliancePriorityNumber,
+            async_setup_entry,
+        )
+
+        added: list = []
+        def _add(entities, update_before_add=False):
+            added.extend(entities)
+
+        hass = MagicMock()
+        coord = _make_coordinator()
+        config_entry = MagicMock()
+        config_entry.entry_id = "test_entry_id"
+        subentry = MagicMock()
+        subentry.data = {"appliance_name": "Pool Pump"}
+        config_entry.subentries = {"app_1": subentry}
+
+        hass.data = {"pv_excess_control": {config_entry.entry_id: coord}}
+
+        await async_setup_entry(hass, config_entry, _add)
+
+        classes = {type(e) for e in added}
+        assert AppliancePriorityNumber in classes
+        assert ApplianceMinDailyRuntimeNumber in classes
+        assert ApplianceMaxDailyRuntimeNumber in classes
+        assert len(added) == 3
 
 
 # ---------------------------------------------------------------------------

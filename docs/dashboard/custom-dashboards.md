@@ -35,6 +35,29 @@ For an appliance named "Water Heater" (slug: `water_heater`):
 
 ---
 
+### Plan confidence sensor attributes
+
+The `sensor.pv_excess_control_plan_confidence` entity exposes the planner's
+scheduled actions so dashboard cards can visualize them.
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `plan_entries` | list | All planned actions for the planning horizon. Each entry is a dict (see below). |
+| `plan_entry_count` | int | Total number of plan entries. |
+
+Each entry in `plan_entries`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `appliance_id` | string | Internal appliance ID (ULID). |
+| `appliance_name` | string | Human-readable appliance name (as configured). |
+| `action` | string | Planned action: `on`, `off`, `set_current`, or `idle`. |
+| `reason` | string | Why scheduled: `excess_available`, `cheap_tariff`, `min_runtime`, `deadline`, etc. |
+| `window_start` | ISO datetime | Start of the 15-minute planning window (present when a tariff window is assigned). |
+| `window_end` | ISO datetime | End of the 15-minute planning window. |
+
+---
+
 ## Example: Power Flow Gauge
 
 ```yaml

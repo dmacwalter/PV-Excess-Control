@@ -138,6 +138,22 @@ CONF_ALLOW_GRID_CHARGING = "allow_grid_charging"
 CONF_BATTERY_MAX_DISCHARGE_ENTITY = "battery_max_discharge_entity"
 CONF_BATTERY_MAX_DISCHARGE_DEFAULT = "battery_max_discharge_default"
 CONF_MIN_BATTERY_SOC = "min_battery_soc"
+
+# Inverter forced grid-charge (auto + manual)
+CONF_AUTO_BATTERY_GRID_CHARGE = "auto_battery_grid_charge"
+CONF_BATTERY_GRID_CHARGE_POWER_W = "battery_grid_charge_power_w"
+CONF_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES = "grid_charge_engage_min_duration_minutes"
+
+CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY = "inverter_force_charge_enable_entity"
+CONF_INVERTER_FORCE_CHARGE_ENABLE_ENGAGE_VALUE = "inverter_force_charge_enable_engage_value"
+CONF_INVERTER_FORCE_CHARGE_ENABLE_DISENGAGE_VALUE = "inverter_force_charge_enable_disengage_value"
+CONF_INVERTER_FORCE_CHARGE_MODE_ENTITY = "inverter_force_charge_mode_entity"
+CONF_INVERTER_FORCE_CHARGE_MODE_ENGAGE_VALUE = "inverter_force_charge_mode_engage_value"
+CONF_INVERTER_FORCE_CHARGE_MODE_DISENGAGE_VALUE = "inverter_force_charge_mode_disengage_value"
+CONF_INVERTER_FORCE_CHARGE_POWER_ENTITY = "inverter_force_charge_power_entity"
+
+DEFAULT_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES = 5
+
 CONF_EXPORT_LIMIT = "export_limit"
 CONF_CONTROLLER_INTERVAL = "controller_interval"
 CONF_PLANNER_INTERVAL = "planner_interval"
@@ -177,7 +193,9 @@ CONF_PLAN_INFLUENCE = "plan_influence"
 CONF_EV_TARGET_SOC = "ev_target_soc"
 CONF_ALLOW_GRID_SUPPLEMENT = "allow_grid_supplement"
 CONF_MAX_GRID_POWER = "max_grid_power"
+CONF_CHEAP_GRID_TARGET_CURRENT = "cheap_grid_target_current"
 CONF_PROTECT_FROM_PREEMPTION = "protect_from_preemption"
 CONF_CURRENT_STEP = "current_step"
 CONF_ON_THRESHOLD = "on_threshold"
+CONF_COMPLETION_POWER_THRESHOLD = "completion_power_threshold"
 CONF_OFF_THRESHOLD = "off_threshold"
