@@ -957,6 +957,8 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 excess_power = None
             else:
                 excess_power = grid_export - grid_import
+                if has_battery and battery_power is not None:
+                    excess_power += battery_power
         elif has_battery and load_power is not None and load_power > 0:
             # Hybrid branch: requires pv_production; load_power is guaranteed
             # non-None by the predicate.
