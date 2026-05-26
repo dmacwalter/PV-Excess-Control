@@ -495,7 +495,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # ── 1. FORECAST PATH ──────────────────────────────────────────────────
         forecast_data = self._last_forecast_data
-        if forecast_data is not None and forecast_data.hourly_breakdown:
+        if forecast_data is not None:
             # Estimate house load from current power state; fall back to 1 kW
             load_w = getattr(power_state, "load_power", None)
             house_load_kw = (load_w / 1000.0) if (load_w and load_w > 0) else 1.0
