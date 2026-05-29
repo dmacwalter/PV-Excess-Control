@@ -269,6 +269,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_sensor_available: dict[str, bool] = {}
         self._last_appliance_configs: list[ApplianceConfig] = []
         self.current_plan: Plan | None = None
+        self._last_forecast_data: Any = None  # ForecastData | None, cached from last planner run
         self.appliance_states: dict[str, ApplianceState] = {}
         self.control_decisions: list[ControlDecision] = []
         self.battery_discharge_action: BatteryDischargeAction | None = None
@@ -436,6 +437,139 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # Inverter grid-charge helpers (Task 10 plumbing)
     # ------------------------------------------------------------------
 
+    def _solar_can_fill_battery(
+        self,
+        power_state: Any,
+        current_soc: float | None,
+        target_soc: float,
+    ) -> bool:
+        """Return True if solar alone can fill the battery to target_soc by target_time.
+
+        Merges two signals, matching the intent of the original
+        sensor.battery_latest_safe_start_time / sensor.should_fast_charge_now logic:
+
+        1. FORECAST PATH (primary): Uses cached Solcast hourly breakdown to
+           calculate net solar energy expected between now and target_time.
+           Derives the *latest safe start time* for grid charging — the last
+           moment at which grid charging can begin and still guarantee the
+           battery reaches target_soc. Only returns False once we are within
+           a 10-minute buffer of that start time. This maximises solar
+           charging and minimises unnecessary grid imports.
+
+        2. REAL-TIME PATH (cross-check): Uses the current net battery charge
+           rate to project forward. If the forecast path says we still have
+           time but the real-time rate implies we are already too far behind
+           (e.g. Solcast is overoptimistic on a dull afternoon), this path
+           overrides and triggers grid charging immediately.
+
+        Returns True  → solar is on track, do not grid charge yet.
+        Returns False → solar cannot fill battery in time, grid charge needed.
+        """
+        from datetime import datetime
+
+        d = self.config_entry.data
+        capacity_kwh = d.get(CONF_BATTERY_CAPACITY)
+        target_time_str = d.get(CONF_BATTERY_TARGET_TIME)
+        grid_charge_kw = (d.get(CONF_BATTERY_GRID_CHARGE_POWER_W) or 3500) / 1000
+
+        if not capacity_kwh or not target_time_str or current_soc is None:
+            return True  # Cannot assess — do not trigger unnecessarily
+
+        try:
+            if isinstance(target_time_str, str):
+                t = datetime.strptime(target_time_str, "%H:%M:%S").time()
+            else:
+                t = target_time_str
+        except (ValueError, TypeError):
+            return True
+
+        now = datetime.now()
+        target_dt = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+        if target_dt <= now:
+            return True  # Past target time — never engage grid charging here
+
+        hours_remaining = (target_dt - now).total_seconds() / 3600.0
+        kwh_needed = max((target_soc - current_soc) / 100.0 * capacity_kwh, 0.0)
+        if kwh_needed <= 0:
+            return True  # Already at or above target
+
+        # ── 1. FORECAST PATH ──────────────────────────────────────────────────
+        forecast_data = self._last_forecast_data
+        if forecast_data is not None:
+            # Estimate house load from current power state; fall back to 1 kW
+            load_w = getattr(power_state, "load_power", None)
+            house_load_kw = (load_w / 1000.0) if (load_w and load_w > 0) else 1.0
+
+            net_solar_kwh = 0.0
+            for slot in forecast_data.hourly_breakdown:
+                slot_start = slot.start
+                slot_end = slot.end
+
+                # Only count slots that overlap with the remaining window
+                if slot_end <= now or slot_start >= target_dt:
+                    continue
+
+                # Clip slot to [now, target_dt] for partial hours
+                effective_start = max(slot_start, now)
+                effective_end = min(slot_end, target_dt)
+                fraction = (effective_end - effective_start).total_seconds() / 3600.0
+
+                net_kw = slot.expected_watts / 1000.0 - house_load_kw
+                if net_kw > 0:
+                    net_solar_kwh += net_kw * fraction
+
+            # How much must grid supply after solar contribution?
+            grid_kwh_needed = max(kwh_needed - net_solar_kwh, 0.0)
+
+            if grid_kwh_needed <= 0:
+                # Forecast says solar alone is sufficient — check real-time agrees
+                # (guards against Solcast overestimating on a dull day)
+                battery_power_w = getattr(power_state, "battery_power", None)
+                if battery_power_w is not None and battery_power_w > 50:
+                    # Battery is actively charging — trust the forecast
+                    return True
+                if battery_power_w is not None and battery_power_w <= 50:
+                    # Not charging despite forecast saying enough solar — be cautious
+                    # Only trust forecast if we have plenty of headroom (>30 min spare)
+                    spare_hours = hours_remaining - (kwh_needed / max(grid_charge_kw, 0.1))
+                    if spare_hours > 0.5:
+                        return True  # Still plenty of buffer time
+                    # Marginal case — fall through to real-time path below
+                else:
+                    return True  # battery_power unavailable — trust forecast
+
+            # Grid charging is needed; calculate latest safe start
+            # (mirror of sensor.battery_latest_safe_start_time logic)
+            grid_hours_needed = grid_kwh_needed / max(grid_charge_kw, 0.1)
+            latest_start_hours_from_now = hours_remaining - grid_hours_needed
+            buffer_hours = 10.0 / 60.0  # 10-minute buffer matching original automation
+
+            if latest_start_hours_from_now > buffer_hours:
+                # ── 2. REAL-TIME CROSS-CHECK ──────────────────────────────────
+                # Forecast says we can wait, but verify current rate isn't
+                # so far behind that Solcast must be wrong.
+                battery_power_w = getattr(power_state, "battery_power", None)
+                if battery_power_w is not None and battery_power_w > 0:
+                    realtime_hours = kwh_needed / (battery_power_w / 1000.0)
+                    # If real-time rate alone would miss the deadline by >50%,
+                    # override the forecast and grid charge now
+                    if realtime_hours > hours_remaining * 1.5:
+                        return False
+                elif battery_power_w is not None and battery_power_w <= 0:
+                    # Not charging at all — grid charge if we're in the last hour
+                    if latest_start_hours_from_now < 1.0:
+                        return False
+                return True  # Within time — let solar do its job
+
+            return False  # Past latest safe start — engage grid charging
+
+        # ── FALLBACK: no forecast data — real-time projection only ────────────
+        battery_power_w = getattr(power_state, "battery_power", None)
+        if battery_power_w is None or battery_power_w <= 0:
+            return False  # Not charging at all
+        hours_to_fill = kwh_needed / (battery_power_w / 1000.0)
+        return hours_to_fill <= hours_remaining
+
     def _build_inverter_controller(self) -> InverterGridChargeController | None:
         """Construct the inverter controller from config_entry.data, or return None."""
         d = self.config_entry.data
@@ -505,17 +639,21 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         soc = getattr(power_state, "battery_soc", None) if power_state is not None else None
         soc_below_target = soc is None or soc < target_soc
 
+        # Real-time solar sufficiency check: project whether the battery can
+        # reach target_soc by target_time at the current net charging rate.
+        # This replaces the stale Solcast-based plan flag, which can be
+        # optimistic on dull days when Solcast hasn't updated yet.
+        solar_covers_target = self._solar_can_fill_battery(
+            power_state=power_state,
+            current_soc=soc,
+            target_soc=target_soc,
+        )
+
         auto_should_engage = (
             auto_flag
             and cheap_now
             and soc_below_target
-            and (
-                # If the planner has run, only grid-charge when it says solar
-                # forecast alone is insufficient to reach the battery target.
-                # This prevents unnecessary grid imports on sunny days.
-                self.current_plan is None
-                or self.current_plan.grid_charge_recommended
-            )
+            and not solar_covers_target
         )
         should_engage = self.force_charge or auto_should_engage
 
@@ -968,13 +1106,6 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 excess_power = None
             else:
                 excess_power = grid_export - grid_import
-                # For hybrid inverters with battery configured, add battery
-                # power back so excess reflects total solar above house load
-                # rather than just grid export. Equivalent to pv - load.
-                # battery_power is positive when charging (adds to excess),
-                # negative when discharging (removes battery contribution).
-                if has_battery and battery_power is not None:
-                    excess_power += battery_power
         elif has_battery and load_power is not None and load_power > 0:
             # Hybrid branch: requires pv_production; load_power is guaranteed
             # non-None by the predicate.
@@ -1361,6 +1492,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         battery_config = self._get_battery_config()
         battery_soc = _parse_sensor_float(self.hass, data.get(CONF_BATTERY_SOC))
         export_limit = data.get(CONF_EXPORT_LIMIT)
+        self._last_forecast_data = forecast_data  # Cache for _solar_can_fill_battery
 
         try:
             self.current_plan = self.planner.create_plan(
