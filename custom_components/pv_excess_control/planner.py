@@ -691,11 +691,13 @@ class Planner:
             )
             return []
 
-        # Sort by solar excess descending first — run when most solar is available.
-        # Price is a secondary tiebreaker only: when excess is equal or zero,
-        # prefer cheaper slots to minimise grid cost if supplement is needed.
+        # Sort eligible slots by start time — schedule pool from the earliest
+        # solar opportunity rather than just peak midday. This starts the pool
+        # at ~9am when solar first provides meaningful excess, running forward
+        # through midday, which both avoids export curtailment and maximises
+        # total solar absorbed. Price is a secondary tiebreaker for equal times.
         eligible_slots.sort(
-            key=lambda x: (-remaining_excess.get(x[0], 0.0), x[1].price)
+            key=lambda x: (x[1].start, x[1].price)
         )
 
         for idx, slot in eligible_slots:
