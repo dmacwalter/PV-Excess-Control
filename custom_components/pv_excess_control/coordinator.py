@@ -525,11 +525,12 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if grid_kwh_needed <= 0:
                 # Forecast says solar alone is sufficient — check real-time agrees
                 # (guards against Solcast overestimating on a dull day)
+                # GoodWe convention: negative battery_power = charging
                 battery_power_w = getattr(power_state, "battery_power", None)
-                if battery_power_w is not None and battery_power_w > 50:
+                if battery_power_w is not None and battery_power_w < -50:
                     # Battery is actively charging — trust the forecast
                     return True
-                if battery_power_w is not None and battery_power_w <= 50:
+                if battery_power_w is not None and battery_power_w >= -50:
                     # Not charging despite forecast saying enough solar — be cautious
                     # Only trust forecast if we have plenty of headroom (>30 min spare)
                     spare_hours = hours_remaining - (kwh_needed / max(grid_charge_kw, 0.1))
@@ -549,15 +550,15 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # ── 2. REAL-TIME CROSS-CHECK ──────────────────────────────────
                 # Forecast says we can wait, but verify current rate isn't
                 # so far behind that Solcast must be wrong.
+                # GoodWe: negative = charging, positive = discharging
                 battery_power_w = getattr(power_state, "battery_power", None)
-                if battery_power_w is not None and battery_power_w > 0:
-                    realtime_hours = kwh_needed / (battery_power_w / 1000.0)
-                    # If real-time rate alone would miss the deadline by >50%,
-                    # override the forecast and grid charge now
+                if battery_power_w is not None and battery_power_w < 0:
+                    # Charging — check rate is sufficient
+                    realtime_hours = kwh_needed / (abs(battery_power_w) / 1000.0)
                     if realtime_hours > hours_remaining * 1.5:
                         return False
-                elif battery_power_w is not None and battery_power_w <= 0:
-                    # Not charging at all — grid charge if we're in the last hour
+                elif battery_power_w is not None and battery_power_w >= 0:
+                    # Not charging — grid charge if within last hour
                     if latest_start_hours_from_now < 1.0:
                         return False
                 return True  # Within time — let solar do its job
@@ -565,10 +566,11 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False  # Past latest safe start — engage grid charging
 
         # ── FALLBACK: no forecast data — real-time projection only ────────────
+        # GoodWe: negative battery_power = charging
         battery_power_w = getattr(power_state, "battery_power", None)
-        if battery_power_w is None or battery_power_w <= 0:
+        if battery_power_w is None or battery_power_w >= 0:
             return False  # Not charging at all
-        hours_to_fill = kwh_needed / (battery_power_w / 1000.0)
+        hours_to_fill = kwh_needed / (abs(battery_power_w) / 1000.0)
         return hours_to_fill <= hours_remaining
 
     async def _async_recover_runtime_today(
@@ -1203,6 +1205,12 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 excess_power = None
             else:
                 excess_power = grid_export - grid_import
+                # Hybrid inverter adjustment: subtract battery_power to get pv - load.
+                # GoodWe convention: negative = charging, positive = discharging.
+                # Subtracting a negative (charging) adds it back → correct excess.
+                # Subtracting a positive (discharging) removes battery contribution.
+                if has_battery and battery_power is not None:
+                    excess_power -= battery_power
         elif has_battery and load_power is not None and load_power > 0:
             # Hybrid branch: requires pv_production; load_power is guaranteed
             # non-None by the predicate.
