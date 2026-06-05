@@ -523,36 +523,53 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             grid_kwh_needed = max(kwh_needed - net_solar_kwh, 0.0)
 
             if grid_kwh_needed <= 0:
+                # Forecast says solar alone is sufficient — check real-time agrees
+                # (guards against Solcast overestimating on a dull day)
+                # GoodWe convention: negative battery_power = charging
                 battery_power_w = getattr(power_state, "battery_power", None)
                 if battery_power_w is not None and battery_power_w > 50:
-                    return True  # Charging — trust the forecast
+                    # Battery is actively charging — trust the forecast
+                    return True
                 if battery_power_w is not None and battery_power_w <= 50:
+                    # Not charging despite forecast saying enough solar — be cautious
+                    # Only trust forecast if we have plenty of headroom (>30 min spare)
                     spare_hours = hours_remaining - (kwh_needed / max(grid_charge_kw, 0.1))
                     if spare_hours > 0.5:
-                        return True
+                        return True  # Still plenty of buffer time
+                    # Marginal case — fall through to real-time path below
                 else:
-                    return True
+                    return True  # battery_power unavailable — trust forecast
 
+            # Grid charging is needed; calculate latest safe start
+            # (mirror of sensor.battery_latest_safe_start_time logic)
             grid_hours_needed = grid_kwh_needed / max(grid_charge_kw, 0.1)
             latest_start_hours_from_now = hours_remaining - grid_hours_needed
-            buffer_hours = 10.0 / 60.0
+            buffer_hours = 10.0 / 60.0  # 10-minute buffer matching original automation
 
             if latest_start_hours_from_now > buffer_hours:
+                # ── 2. REAL-TIME CROSS-CHECK ──────────────────────────────────
+                # Forecast says we can wait, but verify current rate isn't
+                # so far behind that Solcast must be wrong.
+                # GoodWe: negative = charging, positive = discharging
                 battery_power_w = getattr(power_state, "battery_power", None)
                 if battery_power_w is not None and battery_power_w > 0:
+                    # Charging — check rate is sufficient
                     realtime_hours = kwh_needed / (battery_power_w / 1000.0)
                     if realtime_hours > hours_remaining * 1.5:
                         return False
                 elif battery_power_w is not None and battery_power_w <= 0:
+                    # Not charging — grid charge if within last hour
                     if latest_start_hours_from_now < 1.0:
                         return False
-                return True
+                return True  # Within time — let solar do its job
 
-            return False
+            return False  # Past latest safe start — engage grid charging
 
+        # ── FALLBACK: no forecast data — real-time projection only ────────────
+        # GoodWe: negative battery_power = charging
         battery_power_w = getattr(power_state, "battery_power", None)
         if battery_power_w is None or battery_power_w <= 0:
-            return False
+            return False  # Not charging at all
         hours_to_fill = kwh_needed / (battery_power_w / 1000.0)
         return hours_to_fill <= hours_remaining
 
@@ -1188,10 +1205,10 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 excess_power = None
             else:
                 excess_power = grid_export - grid_import
-                # Hybrid inverter adjustment: add battery_power to get pv - load.
-                # HA GoodWe sensor convention: positive = charging (absorbing solar),
-                # negative = discharging. Adding a positive (charging) gives back
-                # the solar going into battery as available excess.
+                # Hybrid inverter adjustment: subtract battery_power to get pv - load.
+                # GoodWe convention: negative = charging, positive = discharging.
+                # Subtracting a negative (charging) adds it back → correct excess.
+                # Subtracting a positive (discharging) removes battery contribution.
                 if has_battery and battery_power is not None:
                     excess_power += battery_power
         elif has_battery and load_power is not None and load_power > 0:
