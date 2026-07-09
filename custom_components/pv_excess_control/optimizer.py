@@ -754,12 +754,16 @@ class Optimizer:
                 "freeing solar for battery charging",
                 appliance.name,
             )
-            return ControlDecision(
-                action=Action.OFF,
-                power_delta=-(state.current_power or 0),
-                reason=f"Battery priority: min runtime met, freeing solar for battery",
-                switch_entity=appliance.entity_id,
-                target_current=None,
+            return (
+                ControlDecision(
+                    appliance_id=appliance.id,
+                    action=Action.OFF,
+                    target_current=None,
+                    reason="Battery priority: min runtime met, freeing solar for battery",
+                    overrides_plan=False,
+                    bypasses_cooldown=True,
+                ),
+                -(state.current_power or 0),
             )
 
         # --- Already-ON appliances ---
