@@ -695,12 +695,18 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return cheap_now and soc_below_target
 
     async def _run_grid_charge_state_machine(
-        self, tariff_info, power_state,
+        self, tariff_info, power_state, appliance_configs=None, appliance_states=None,
     ) -> None:
         """Engage / disengage forced grid charge based on price + SoC + force_charge.
 
         Idempotent. Safe to call without _inverter_ctl.
+
+        appliance_configs / appliance_states are used by the battery-priority
+        shed check below (falls back to skipping that check if not supplied,
+        e.g. if called before appliance state is available).
         """
+        appliance_configs = appliance_configs or []
+        appliance_states = appliance_states or {}
         d = self.config_entry.data
         power_w = d.get(CONF_BATTERY_GRID_CHARGE_POWER_W)
         if self._inverter_ctl is None or power_w is None:
@@ -806,7 +812,10 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                         running_kw, rt_if_shed, hrs_left,
                                     )
             except Exception:
-                pass  # Fallback: let original logic proceed
+                _LOGGER.exception(
+                    "Battery-priority shed check failed; falling back to "
+                    "plain grid charge (appliances will not be shed first)"
+                )
 
         auto_should_engage = (
             auto_flag
@@ -993,7 +1002,9 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._latest_power_state = power_state
 
         # Run the inverter forced grid-charge state machine
-        await self._run_grid_charge_state_machine(tariff_info, power_state)
+        await self._run_grid_charge_state_machine(
+            tariff_info, power_state, appliance_configs, appliance_states,
+        )
 
         # 7. Build empty plan if none exists
         plan = self.current_plan or self._create_empty_plan()
