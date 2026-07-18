@@ -558,11 +558,16 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             return False
 
-        battery_power_w = getattr(power_state, "battery_power", None)
-        if battery_power_w is None or battery_power_w <= 0:
-            return False
-        hours_to_fill = kwh_needed / (battery_power_w / 1000.0)
-        return hours_to_fill <= hours_remaining
+        # No forecast cache yet — e.g. right after a restart, before the
+        # planner's first run has populated it. Previously this fell through
+        # to a single un-smoothed battery_power reading and returned False
+        # (grid charge needed) if it was <= 0 even for an instant — which is
+        # completely normal (charge current tapering near full SoC, or
+        # telemetry not yet settled post-restart) and is not, on its own,
+        # evidence that solar won't cover the target. Trust that we're fine
+        # until the forecast populates (typically within a cycle or two)
+        # rather than risk an aggressive false-positive grid charge / shed.
+        return True
 
     async def _async_recover_runtime_today(
         self, appliance_configs: list[ApplianceConfig]
