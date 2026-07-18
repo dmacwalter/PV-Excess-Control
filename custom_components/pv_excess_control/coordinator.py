@@ -84,6 +84,7 @@ from .const import (
     CONF_PLAN_INFLUENCE,
     CONF_PLANNER_INTERVAL,
     CONF_PROTECT_FROM_PREEMPTION,
+    CONF_SHED_BEFORE_GRID_CHARGE,
     CONF_PRICE_SENSOR,
     CONF_PV_POWER,
     CONF_REQUIRES_APPLIANCE,
@@ -303,6 +304,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._inverter_ctl: InverterGridChargeController | None = self._build_inverter_controller()
         self._grid_charge_engaged: bool = config_entry.data.get("_grid_charge_engaged", False)
         self._grid_charge_engage_ts: float | None = None
+        self._grid_charge_shed_pending_since: float | None = None
         self._force_charge_prev: bool = self.force_charge
         self._latest_tariff = None
         self._latest_power_state = None
@@ -736,86 +738,49 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             target_soc=target_soc,
         )
 
-        # Before engaging grid charge, check whether shedding running appliances
-        # would free enough solar to fill the battery without grid import.
-        # If an appliance has already met its minimum runtime, actively flag it
-        # for a battery-priority shed rather than just suppressing grid charge.
-        # Skip this check if we're within 30 minutes of the latest safe start.
+        # Before engaging grid charge, unconditionally shed any appliance
+        # flagged shed_before_grid_charge (e.g. the pool) — regardless of
+        # min_daily_runtime or whether shedding it alone is projected to
+        # close the gap. Deadline must-run logic in the optimizer still
+        # protects daily runtime commitments separately, so it's safe to
+        # interrupt here; the appliance will catch up later if needed.
+        #
+        # Engagement is deferred for one full cycle after a shed is issued
+        # (_grid_charge_shed_pending_since), so we never shed and engage in
+        # the same breath — the freed power needs a cycle to actually show
+        # up in battery_power before we trust solar_covers_target again.
         if not solar_covers_target and cheap_now and soc_below_target:
-            d = self.config_entry.data
-            capacity_kwh = d.get(CONF_BATTERY_CAPACITY)
-            target_time_str = d.get(CONF_BATTERY_TARGET_TIME)
-            grid_charge_kw = (d.get(CONF_BATTERY_GRID_CHARGE_POWER_W) or 3500) / 1000
-            try:
-                from datetime import datetime as _dt
-                import dataclasses as _dc
-                t = _dt.strptime(target_time_str, "%H:%M:%S").time()
-                now_local = _dt.now().astimezone()
-                target_dt = now_local.replace(hour=t.hour, minute=t.minute, second=0)
-                hrs_left = max((target_dt - now_local).total_seconds() / 3600, 0)
-                kwh_needed = max((target_soc - (soc or 0)) / 100 * (capacity_kwh or 0), 0)
-                grid_hrs = kwh_needed / max(grid_charge_kw, 0.1)
-                latest_start_hrs = hrs_left - grid_hrs
+            cfg_by_id = {c.id: c for c in appliance_configs}
+            import dataclasses as _dc
 
-                if latest_start_hrs > 0.5:
-                    # Build config lookup for min_daily_runtime checks
-                    cfg_by_id = {c.id: c for c in appliance_configs}
-                    running_kw = 0.0
-                    shed_candidates = []   # ids that have met minimum runtime
-                    non_shed_running = []  # ids still working toward minimum
+            shed_now = []
+            for aid, st in appliance_states.items():
+                cfg = cfg_by_id.get(aid)
+                if not cfg or not cfg.shed_before_grid_charge:
+                    continue
+                if st.is_on and (st.current_power or 0) > 500:
+                    shed_now.append(aid)
+                    appliance_states[aid] = _dc.replace(
+                        st, battery_priority_shed=True,
+                    )
 
-                    for aid, st in appliance_states.items():
-                        if not (st.is_on and (st.current_power or 0) > 500):
-                            continue
-                        kw = (st.current_power or 0) / 1000
-                        running_kw += kw
-                        cfg = cfg_by_id.get(aid)
-                        min_rt = cfg.min_daily_runtime if cfg else None
-                        if min_rt and st.runtime_today >= min_rt:
-                            shed_candidates.append((aid, kw))
-                        else:
-                            non_shed_running.append((aid, kw))
-
-                    if running_kw > 0:
-                        batt_w = getattr(power_state, "battery_power", None) or 0
-                        projected_charge_kw = (batt_w + running_kw * 1000) / 1000
-                        if projected_charge_kw > 0.1:
-                            rt_if_shed = kwh_needed / projected_charge_kw
-                            if rt_if_shed <= hrs_left:
-                                solar_covers_target = True
-
-                                if shed_candidates:
-                                    # Appliances that have met minimum runtime:
-                                    # flag them for battery-priority shed so the
-                                    # optimizer actively stops them this cycle.
-                                    for aid, _ in shed_candidates:
-                                        if aid in appliance_states:
-                                            appliance_states[aid] = _dc.replace(
-                                                appliance_states[aid],
-                                                battery_priority_shed=True,
-                                            )
-                                    _LOGGER.info(
-                                        "Battery priority shed requested for %s "
-                                        "(min runtime met): shedding would allow "
-                                        "solar to fill battery "
-                                        "(rt_if_shed=%.1fh, hrs_left=%.1fh)",
-                                        [a for a, _ in shed_candidates],
-                                        rt_if_shed, hrs_left,
-                                    )
-                                else:
-                                    _LOGGER.debug(
-                                        "Grid charge suppressed: shedding %.1fkW "
-                                        "would allow solar to fill battery — "
-                                        "appliances still working toward minimum "
-                                        "runtime, letting them continue "
-                                        "(rt_if_shed=%.1fh, hrs_left=%.1fh)",
-                                        running_kw, rt_if_shed, hrs_left,
-                                    )
-            except Exception:
-                _LOGGER.exception(
-                    "Battery-priority shed check failed; falling back to "
-                    "plain grid charge (appliances will not be shed first)"
+            if shed_now:
+                self._grid_charge_shed_pending_since = _time.monotonic()
+                solar_covers_target = True  # don't engage this cycle
+                _LOGGER.info(
+                    "Shedding %s before considering grid charge; "
+                    "deferring engagement to next cycle",
+                    shed_now,
                 )
+            elif self._grid_charge_shed_pending_since is not None:
+                # A shed-and-wait cycle from last time — give the freed
+                # power one cycle to land in battery_power before deciding
+                # again. Re-run the real-time cross-check now that the
+                # flagged appliances are confirmed off.
+                elapsed_since_shed = _time.monotonic() - self._grid_charge_shed_pending_since
+                self._grid_charge_shed_pending_since = None
+                if elapsed_since_shed < (self.update_interval.total_seconds() if self.update_interval else 30):
+                    solar_covers_target = True
 
         auto_should_engage = (
             auto_flag
@@ -1421,6 +1386,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 requires_appliance=sub_data.get(CONF_REQUIRES_APPLIANCE),
                 helper_only=sub_data.get(CONF_HELPER_ONLY, False),
                 protect_from_preemption=sub_data.get(CONF_PROTECT_FROM_PREEMPTION, False),
+                shed_before_grid_charge=sub_data.get(CONF_SHED_BEFORE_GRID_CHARGE, False),
                 current_step=sub_data.get(CONF_CURRENT_STEP, 0.1),
                 override_active=override_active,
                 max_daily_activations=max_activations,
@@ -2039,6 +2005,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             requires_appliance=sub_data.get(CONF_REQUIRES_APPLIANCE),
             helper_only=sub_data.get(CONF_HELPER_ONLY, False),
             protect_from_preemption=sub_data.get(CONF_PROTECT_FROM_PREEMPTION, False),
+            shed_before_grid_charge=sub_data.get(CONF_SHED_BEFORE_GRID_CHARGE, False),
             current_step=sub_data.get(CONF_CURRENT_STEP, 0.1),
             override_active=override_active,
             max_daily_activations=(

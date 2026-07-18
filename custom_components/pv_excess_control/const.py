@@ -195,6 +195,13 @@ CONF_ALLOW_GRID_SUPPLEMENT = "allow_grid_supplement"
 CONF_MAX_GRID_POWER = "max_grid_power"
 CONF_CHEAP_GRID_TARGET_CURRENT = "cheap_grid_target_current"
 CONF_PROTECT_FROM_PREEMPTION = "protect_from_preemption"
+
+# If True, this appliance is always shed before the grid-charge state machine
+# is allowed to engage forced grid charge — regardless of whether it has met
+# min_daily_runtime, and regardless of whether shedding it alone is projected
+# to close the gap. Engagement is then deferred to the following cycle so the
+# freed power has a chance to actually show up in battery_power first.
+CONF_SHED_BEFORE_GRID_CHARGE = "shed_before_grid_charge"
 CONF_CURRENT_STEP = "current_step"
 CONF_ON_THRESHOLD = "on_threshold"
 CONF_COMPLETION_POWER_THRESHOLD = "completion_power_threshold"
