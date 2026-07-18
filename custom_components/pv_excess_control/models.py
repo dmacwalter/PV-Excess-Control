@@ -96,6 +96,10 @@ class ApplianceConfig:
     # Preemption protection
     protect_from_preemption: bool = False
 
+    # Always shed this appliance before forced grid charge is allowed to
+    # engage, regardless of min_daily_runtime or projected impact.
+    shed_before_grid_charge: bool = False
+
     # Dynamic current step size (default 0.1A)
     current_step: float = 0.1
 
