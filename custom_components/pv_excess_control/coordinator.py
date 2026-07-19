@@ -1257,7 +1257,17 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # HA GoodWe sensor convention: positive = charging (absorbing solar),
                 # negative = discharging. Adding a positive (charging) gives back
                 # the solar going into battery as available excess.
-                if has_battery and battery_power is not None:
+                #
+                # This assumption only holds in normal self-consumption mode.
+                # When forced grid-charge is engaged (_run_grid_charge_state_machine),
+                # battery_power is positive because the battery is being charged
+                # FROM THE GRID, not from solar. grid_import already reflects that
+                # draw and is correctly subtracted above; crediting battery_power
+                # back on top of that double-counts it and can mask a large grid
+                # draw as "excess", which downstream PV-surplus consumers (e.g.
+                # evcc PV mode reading this same sensor) would then act on as if
+                # it were real solar. Skip the credit while grid-charge is engaged.
+                if has_battery and battery_power is not None and not self._grid_charge_engaged:
                     excess_power += battery_power
         elif has_battery and load_power is not None and load_power > 0:
             # Hybrid branch: requires pv_production; load_power is guaranteed
