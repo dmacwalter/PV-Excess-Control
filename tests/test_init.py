@@ -715,6 +715,75 @@ class TestCollectPowerState:
         # Combined branch wins: excess = grid_export - grid_import = 1500 - 0
         assert ps.excess_power == 1500.0
 
+    def test_grid_charge_engaged_does_not_credit_battery_power_as_excess(self):
+        """Forced grid-charge is charging the battery FROM THE GRID, not from
+        solar. grid_import already reflects that draw; crediting battery_power
+        back on top double-counts it and reports a false PV surplus — the exact
+        false reading that fools an external PV-surplus consumer such as evcc
+        into ramping up wallbox current thinking it's using excess solar."""
+        entry = _make_config_entry(data={
+            CONF_PV_POWER: "sensor.pv_power",
+            CONF_IMPORT_EXPORT: "sensor.grid_power",
+            CONF_LOAD_POWER: "sensor.load_power",
+            CONF_BATTERY_CHARGE_POWER: "sensor.battery_charge",
+            CONF_BATTERY_DISCHARGE_POWER: "sensor.battery_discharge",
+            CONF_GRID_VOLTAGE: DEFAULT_GRID_VOLTAGE,
+            CONF_CONTROLLER_INTERVAL: DEFAULT_CONTROLLER_INTERVAL,
+            CONF_PLANNER_INTERVAL: DEFAULT_PLANNER_INTERVAL,
+            CONF_TARIFF_PROVIDER: TariffProviderEnum.NONE,
+            CONF_FORECAST_PROVIDER: ForecastProviderEnum.NONE,
+        })
+        states = {
+            "sensor.pv_power": MockState("300"),
+            # Almost no solar; the battery is being force-charged from the
+            # grid, so the meter shows a big import.
+            "sensor.grid_power": MockState("-4800"),  # importing 4800W
+            "sensor.load_power": MockState("400"),
+            "sensor.battery_charge": MockState("5000"),  # charging at 5000W
+            "sensor.battery_discharge": MockState("0"),
+        }
+        hass = MockHass(states)
+        coord = _make_coordinator(hass=hass, entry=entry)
+        coord._grid_charge_engaged = True
+
+        ps = coord._collect_power_state()
+
+        # Without the fix: excess = (0 - 4800) + 5000 = +200 (false surplus).
+        # With the fix: battery_power is not credited back, so excess stays
+        # negative, correctly reflecting that this is all grid draw.
+        assert ps.excess_power == -4800.0
+
+    def test_grid_charge_not_engaged_still_credits_battery_power(self):
+        """Regression guard: normal self-consumption charging (grid-charge
+        NOT engaged) must keep crediting battery_power as before."""
+        entry = _make_config_entry(data={
+            CONF_PV_POWER: "sensor.pv_power",
+            CONF_IMPORT_EXPORT: "sensor.grid_power",
+            CONF_LOAD_POWER: "sensor.load_power",
+            CONF_BATTERY_CHARGE_POWER: "sensor.battery_charge",
+            CONF_BATTERY_DISCHARGE_POWER: "sensor.battery_discharge",
+            CONF_GRID_VOLTAGE: DEFAULT_GRID_VOLTAGE,
+            CONF_CONTROLLER_INTERVAL: DEFAULT_CONTROLLER_INTERVAL,
+            CONF_PLANNER_INTERVAL: DEFAULT_PLANNER_INTERVAL,
+            CONF_TARIFF_PROVIDER: TariffProviderEnum.NONE,
+            CONF_FORECAST_PROVIDER: ForecastProviderEnum.NONE,
+        })
+        states = {
+            "sensor.pv_power": MockState("6000"),
+            "sensor.grid_power": MockState("0"),  # neither importing nor exporting
+            "sensor.load_power": MockState("1000"),
+            "sensor.battery_charge": MockState("5000"),  # absorbing solar
+            "sensor.battery_discharge": MockState("0"),
+        }
+        hass = MockHass(states)
+        coord = _make_coordinator(hass=hass, entry=entry)
+        assert coord._grid_charge_engaged is False  # default
+
+        ps = coord._collect_power_state()
+
+        # excess = (0 - 0) + 5000 = 5000, unchanged from current behaviour.
+        assert ps.excess_power == 5000.0
+
     def test_pv_unavailable_hybrid_branch_returns_none_excess(self):
         """Hybrid config, PV sensor unavailable → excess and pv_production both None."""
         entry = _make_config_entry(data={
