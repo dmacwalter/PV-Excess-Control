@@ -1578,6 +1578,22 @@ class Optimizer:
     # Phase 3: SHED
     # ------------------------------------------------------------------
 
+    def _deadline_passed(self, deadline: time) -> bool:
+        """Return True if the given time-of-day deadline has already
+        passed for "today" — i.e. current clock time is at or past it.
+
+        This is a plain today-only comparison, deliberately simpler
+        than the ON-side "must-run before deadline" arithmetic in
+        _allocate_appliance: that logic computes seconds-until-next-
+        occurrence (needing an overnight wraparound because it must
+        always point at a future occurrence, today or tomorrow), while
+        this just answers "has today's deadline clock-time passed",
+        which `time` objects can compare directly.
+        """
+        from datetime import datetime
+        now = datetime.now(self._tz).time() if self._tz else datetime.now().time()
+        return now >= deadline
+
     def _shed(
         self,
         decisions: list[ControlDecision],
@@ -1685,6 +1701,31 @@ class Optimizer:
                     appliance.name, state.runtime_today, appliance.min_daily_runtime,
                 )
                 continue
+
+            # Deadline-aware shed protection: if this appliance has a
+            # schedule_deadline that hasn't passed yet, and it has an
+            # averaging_window configured, prefer its own averaged excess
+            # over the shared instant_budget. This stops a brief dip in
+            # the instantaneous reading from shedding an appliance that
+            # still has time to ride out the dip before its deadline —
+            # SHED normally reacts to instant_budget on purpose (see
+            # module docstring), but that urgency isn't warranted while
+            # there's no deadline pressure. Once the deadline passes,
+            # or if the averaged figure also looks bad, fall through to
+            # the normal instant-based shed below.
+            if (not force_shed
+                    and appliance.schedule_deadline is not None
+                    and appliance.id in self._appliance_avg_excess):
+                if not self._deadline_passed(appliance.schedule_deadline):
+                    app_avg = self._appliance_avg_excess[appliance.id]
+                    if app_avg >= self._off_threshold:
+                        _LOGGER.debug(
+                            "  Skipping shed of %s: before deadline (%s) and "
+                            "averaged excess %.0fW still >= off threshold %.0fW",
+                            appliance.name, appliance.schedule_deadline,
+                            app_avg, self._off_threshold,
+                        )
+                        continue
 
             idx = decision_index[app_id]
             current_decision = decisions[idx]
