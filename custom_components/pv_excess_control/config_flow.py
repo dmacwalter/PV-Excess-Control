@@ -100,6 +100,9 @@ from .const import (
     CONF_INVERTER_TYPE,
     CONF_IS_BIG_CONSUMER,
     CONF_LOAD_POWER,
+    CONF_EXTERNAL_LOAD_POWER,
+    CONF_EXTERNAL_LOAD_PRIORITY_ENTITY,
+    CONF_EXTERNAL_LOAD_PRIORITY_STATE,
     CONF_MAX_CURRENT,
     CONF_MAX_DAILY_ACTIVATIONS,
     CONF_MAX_DAILY_RUNTIME,
@@ -559,6 +562,17 @@ def _sensor_schema(
         vol.Optional(CONF_GRID_EXPORT, description={"suggested_value": d.get(CONF_GRID_EXPORT)}): SENSOR_ENTITY_SELECTOR,
         vol.Optional(CONF_IMPORT_EXPORT, description={"suggested_value": d.get(CONF_IMPORT_EXPORT)}): SENSOR_ENTITY_SELECTOR,
         vol.Optional(CONF_LOAD_POWER, description={"suggested_value": d.get(CONF_LOAD_POWER)}): SENSOR_ENTITY_SELECTOR,
+        vol.Optional(CONF_EXTERNAL_LOAD_POWER, description={"suggested_value": d.get(CONF_EXTERNAL_LOAD_POWER)}): SENSOR_ENTITY_SELECTOR,
+        vol.Optional(
+            CONF_EXTERNAL_LOAD_PRIORITY_ENTITY,
+            description={"suggested_value": d.get(CONF_EXTERNAL_LOAD_PRIORITY_ENTITY)},
+        ): EntitySelector(
+            EntitySelectorConfig(domain=["sensor", "select", "input_select", "input_text"])
+        ),
+        vol.Optional(
+            CONF_EXTERNAL_LOAD_PRIORITY_STATE,
+            description={"suggested_value": d.get(CONF_EXTERNAL_LOAD_PRIORITY_STATE)},
+        ): TextSelector(),
     }
 
     if is_hybrid:
@@ -980,11 +994,25 @@ class PvExcessControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not has_grid and not has_combined and not has_load:
                 errors["base"] = "no_grid_sensor"
 
+            # The priority-override differentiator only makes sense alongside
+            # an external load sensor, and needs both halves (which entity to
+            # watch, and which state means "priority") to be usable.
+            ext_power = bool(user_input.get(CONF_EXTERNAL_LOAD_POWER))
+            ext_prio_entity = bool(user_input.get(CONF_EXTERNAL_LOAD_PRIORITY_ENTITY))
+            ext_prio_state = bool(user_input.get(CONF_EXTERNAL_LOAD_PRIORITY_STATE))
+            if (ext_prio_entity or ext_prio_state) and not ext_power:
+                errors[CONF_EXTERNAL_LOAD_PRIORITY_ENTITY] = "external_priority_needs_load"
+            elif ext_prio_entity != ext_prio_state:
+                errors[CONF_EXTERNAL_LOAD_PRIORITY_STATE] = "external_priority_incomplete"
+
             # For hybrid, battery fields are required (enforced by schema)
             if not errors:
                 self.data.update(user_input)
                 # Clean optional sensor keys not present in user_input
                 for key in [CONF_GRID_EXPORT, CONF_IMPORT_EXPORT, CONF_LOAD_POWER,
+                            CONF_EXTERNAL_LOAD_POWER,
+                            CONF_EXTERNAL_LOAD_PRIORITY_ENTITY,
+                            CONF_EXTERNAL_LOAD_PRIORITY_STATE,
                             CONF_BATTERY_POWER, CONF_BATTERY_CHARGE_POWER, CONF_BATTERY_DISCHARGE_POWER]:
                     if key not in user_input:
                         self.data.pop(key, None)
@@ -1252,10 +1280,24 @@ class PvExcessControlOptionsFlow(config_entries.OptionsFlow):
             has_load = bool(user_input.get(CONF_LOAD_POWER))
             if not has_grid and not has_combined and not has_load:
                 errors["base"] = "no_grid_sensor"
+
+            # The priority-override differentiator only makes sense alongside
+            # an external load sensor, and needs both halves (which entity to
+            # watch, and which state means "priority") to be usable.
+            ext_power = bool(user_input.get(CONF_EXTERNAL_LOAD_POWER))
+            ext_prio_entity = bool(user_input.get(CONF_EXTERNAL_LOAD_PRIORITY_ENTITY))
+            ext_prio_state = bool(user_input.get(CONF_EXTERNAL_LOAD_PRIORITY_STATE))
+            if (ext_prio_entity or ext_prio_state) and not ext_power:
+                errors[CONF_EXTERNAL_LOAD_PRIORITY_ENTITY] = "external_priority_needs_load"
+            elif ext_prio_entity != ext_prio_state:
+                errors[CONF_EXTERNAL_LOAD_PRIORITY_STATE] = "external_priority_incomplete"
             if not errors:
                 self.data.update(user_input)
                 # Clean optional sensor keys not present in user_input
                 for key in [CONF_GRID_EXPORT, CONF_IMPORT_EXPORT, CONF_LOAD_POWER,
+                            CONF_EXTERNAL_LOAD_POWER,
+                            CONF_EXTERNAL_LOAD_PRIORITY_ENTITY,
+                            CONF_EXTERNAL_LOAD_PRIORITY_STATE,
                             CONF_BATTERY_POWER, CONF_BATTERY_CHARGE_POWER, CONF_BATTERY_DISCHARGE_POWER]:
                     if key not in user_input:
                         self.data.pop(key, None)
