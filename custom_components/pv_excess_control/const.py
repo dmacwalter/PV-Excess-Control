@@ -202,6 +202,13 @@ CONF_PROTECT_FROM_PREEMPTION = "protect_from_preemption"
 # to close the gap. Engagement is then deferred to the following cycle so the
 # freed power has a chance to actually show up in battery_power first.
 CONF_SHED_BEFORE_GRID_CHARGE = "shed_before_grid_charge"
+
+# If True, this appliance is a battery-charging control (e.g. an inverter
+# "fast charge" switch that pulls AC/grid current directly rather than
+# being wattage-modulated). It will never be turned ON by ALLOCATE
+# grid-supplement or PREEMPT once the battery has already reached the
+# plan's target SoC.
+CONF_BATTERY_TARGET_GATED = "battery_target_gated"
 CONF_CURRENT_STEP = "current_step"
 CONF_ON_THRESHOLD = "on_threshold"
 CONF_COMPLETION_POWER_THRESHOLD = "completion_power_threshold"

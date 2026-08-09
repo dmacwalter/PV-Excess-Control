@@ -85,6 +85,7 @@ from .const import (
     CONF_PLANNER_INTERVAL,
     CONF_PROTECT_FROM_PREEMPTION,
     CONF_SHED_BEFORE_GRID_CHARGE,
+    CONF_BATTERY_TARGET_GATED,
     CONF_PRICE_SENSOR,
     CONF_PV_POWER,
     CONF_REQUIRES_APPLIANCE,
@@ -1402,6 +1403,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 helper_only=sub_data.get(CONF_HELPER_ONLY, False),
                 protect_from_preemption=sub_data.get(CONF_PROTECT_FROM_PREEMPTION, False),
                 shed_before_grid_charge=sub_data.get(CONF_SHED_BEFORE_GRID_CHARGE, False),
+                battery_target_gated=sub_data.get(CONF_BATTERY_TARGET_GATED, False),
                 current_step=sub_data.get(CONF_CURRENT_STEP, 0.1),
                 override_active=override_active,
                 max_daily_activations=max_activations,
@@ -2021,6 +2023,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             helper_only=sub_data.get(CONF_HELPER_ONLY, False),
             protect_from_preemption=sub_data.get(CONF_PROTECT_FROM_PREEMPTION, False),
             shed_before_grid_charge=sub_data.get(CONF_SHED_BEFORE_GRID_CHARGE, False),
+            battery_target_gated=sub_data.get(CONF_BATTERY_TARGET_GATED, False),
             current_step=sub_data.get(CONF_CURRENT_STEP, 0.1),
             override_active=override_active,
             max_daily_activations=(
