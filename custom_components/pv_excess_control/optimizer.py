@@ -393,6 +393,36 @@ class Optimizer:
             0.0,
         )
 
+    def _battery_target_reached(self, margin: float = 0.0) -> bool:
+        """Return True if the battery has already met (or exceeded) the
+        current plan's target SoC.
+
+        Used to gate ``battery_target_gated`` appliances (e.g. an inverter
+        fast-charge switch) out of ALLOCATE grid-supplement and PREEMPT,
+        both of which are otherwise purely power-budget checks with no
+        SoC awareness. Without this gate those phases will happily turn
+        on a grid-drawing "charge the battery faster" appliance even
+        when the battery is already full or on track to fill from solar
+        alone -- the AC-import equivalent should only ever be a last
+        resort, never an opportunistic add-on.
+
+        Returns False (i.e. "not reached", so the gate does not block)
+        when there is no plan, no configured target_soc, or no current
+        battery_soc reading -- we only block when we can positively
+        confirm the target is met, never on missing data.
+
+        ``margin`` allows callers to treat "close enough" (e.g. reached
+        within 1%) as reached too; defaults to an exact comparison.
+        """
+        if self._current_plan is None:
+            return False
+        battery_target = self._current_plan.battery_target
+        if battery_target is None or battery_target.target_soc is None:
+            return False
+        if self._current_battery_soc is None:
+            return False
+        return self._current_battery_soc >= (battery_target.target_soc - margin)
+
     def _apply_safety_rules(
         self,
         appliance: ApplianceConfig,
@@ -891,6 +921,7 @@ class Optimizer:
             appliance.allow_grid_supplement
             and tariff.current_price < tariff.feed_in_tariff
             and self._grid_supplement_count < 3
+            and not (appliance.battery_target_gated and self._battery_target_reached())
         ):
             self._grid_supplement_count += 1
             if appliance.dynamic_current and appliance.current_entity:
@@ -1018,6 +1049,7 @@ class Optimizer:
         if (
             appliance.allow_grid_supplement
             and self._is_cheap_for_appliance(tariff, appliance)
+            and not (appliance.battery_target_gated and self._battery_target_reached())
         ):
             max_grid = appliance.max_grid_power if appliance.max_grid_power is not None else appliance.nominal_power
             solar_portion = max(avg_budget, 0.0)
@@ -1143,6 +1175,7 @@ class Optimizer:
             if (
                 appliance.allow_grid_supplement
                 and self._is_cheap_for_appliance(tariff, appliance)
+                and not (appliance.battery_target_gated and self._battery_target_reached())
             ):
                 override_amps = self._cheap_window_target_amps(appliance, tariff, phases)
                 target_amps = override_amps if override_amps is not None else appliance.min_current
@@ -1399,6 +1432,22 @@ class Optimizer:
                 continue
             appliance = appliance_by_id.get(decision.appliance_id)
             if appliance is None:
+                continue
+            # Never preempt-start a battery-charge-control appliance (e.g.
+            # an inverter fast-charge switch) once the battery has already
+            # reached the plan's target SoC. PREEMPT is a pure power-budget
+            # feasibility check with no SoC awareness of its own — without
+            # this guard it will happily free up wattage (e.g. by shedding
+            # the pool heater) and use it to justify flipping on a switch
+            # that actually commands the inverter to pull AC/grid current,
+            # regardless of whether the battery needs it. Leave the
+            # appliance IDLE; it stays eligible for a future cycle once
+            # the battery drops back below target.
+            if appliance.battery_target_gated and self._battery_target_reached():
+                _LOGGER.debug(
+                    "  Preempt skip %s: battery target already reached (%.0f%%)",
+                    appliance.name, self._current_battery_soc or -1,
+                )
                 continue
             idle_candidates.append((decision.appliance_id, appliance))
 

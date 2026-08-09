@@ -100,6 +100,16 @@ class ApplianceConfig:
     # engage, regardless of min_daily_runtime or projected impact.
     shed_before_grid_charge: bool = False
 
+    # If True, this appliance is treated as a battery-charging control
+    # (e.g. an inverter "fast charge" switch that pulls AC/grid current
+    # rather than being wattage-modulated like a normal load). Such
+    # appliances must never be turned ON — via ALLOCATE grid-supplement,
+    # PREEMPT, or otherwise — once the battery has already reached the
+    # plan's target SoC, since any further charging at that point can
+    # only come from the grid with no benefit. See
+    # Optimizer._battery_target_reached().
+    battery_target_gated: bool = False
+
     # Dynamic current step size (default 0.1A)
     current_step: float = 0.1
 

@@ -119,6 +119,7 @@ from .const import (
     CONF_PLANNER_INTERVAL,
     CONF_PROTECT_FROM_PREEMPTION,
     CONF_SHED_BEFORE_GRID_CHARGE,
+    CONF_BATTERY_TARGET_GATED,
     CONF_PRICE_SENSOR,
     CONF_PV_POWER,
     CONF_HELPER_ONLY,
@@ -407,6 +408,10 @@ def _appliance_constraints_schema(
         vol.Required(
             CONF_SHED_BEFORE_GRID_CHARGE,
             default=d.get(CONF_SHED_BEFORE_GRID_CHARGE, False),
+        ): BooleanSelector(),
+        vol.Required(
+            CONF_BATTERY_TARGET_GATED,
+            default=d.get(CONF_BATTERY_TARGET_GATED, False),
         ): BooleanSelector(),
         vol.Optional(
             CONF_MIN_DAILY_RUNTIME,
