@@ -122,6 +122,34 @@ CONF_BATTERY_POWER = "battery_power"
 CONF_BATTERY_CHARGE_POWER = "battery_charge_power"
 CONF_BATTERY_DISCHARGE_POWER = "battery_discharge_power"
 CONF_BATTERY_CAPACITY = "battery_capacity"
+
+# --- Externally-managed load add-back (e.g. an EV charger run by evcc) ---
+# A load that is controlled by *another* system (evcc, an OEM wallbox app,
+# etc.) rather than by this integration still shows up in the grid meter
+# reading, which makes it look like the solar surplus has vanished. If that
+# external controller is itself surplus-following, both systems end up
+# fighting for the same watts and whichever reacts first wins.
+#
+# When CONF_EXTERNAL_LOAD_POWER is set, that load's live draw is added back
+# onto the computed excess so this integration sees the surplus that *would*
+# exist if the external load weren't drawing. Its own appliances are then
+# allocated against that "true" surplus, and the external controller backs
+# off to whatever is left (evcc does this via residualPower / aux meters).
+# Net effect: this integration's appliances take priority over the external
+# load.
+CONF_EXTERNAL_LOAD_POWER = "external_load_power"
+
+# Optional priority-override differentiator. Points at an entity exposed by
+# the external controller that reports when the user has explicitly demanded
+# maximum power for that load (e.g. evcc's charge mode set to "now", the
+# "Fast Charge" button in the evcc UI). While that entity matches
+# CONF_EXTERNAL_LOAD_PRIORITY_STATE, the add-back above is skipped, so this
+# integration sees the genuinely reduced excess and sheds its own appliances
+# out of the way like any other load — respecting the user's explicit
+# request instead of protecting appliances against it.
+CONF_EXTERNAL_LOAD_PRIORITY_ENTITY = "external_load_priority_entity"
+CONF_EXTERNAL_LOAD_PRIORITY_STATE = "external_load_priority_state"
+
 CONF_TARIFF_PROVIDER = "tariff_provider"
 CONF_PRICE_SENSOR = "price_sensor"
 CONF_CHEAP_PRICE_THRESHOLD = "cheap_price_threshold"

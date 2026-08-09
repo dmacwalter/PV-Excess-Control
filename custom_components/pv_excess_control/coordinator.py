@@ -29,6 +29,9 @@ from .const import (
     CONF_APPLIANCE_PRIORITY,
     CONF_ACTUAL_POWER_ENTITY,
     CONF_BATTERY_CAPACITY,
+    CONF_EXTERNAL_LOAD_POWER,
+    CONF_EXTERNAL_LOAD_PRIORITY_ENTITY,
+    CONF_EXTERNAL_LOAD_PRIORITY_STATE,
     CONF_INVERTER_TYPE,
     CONF_BATTERY_MAX_DISCHARGE_DEFAULT,
     CONF_BATTERY_MAX_DISCHARGE_ENTITY,
@@ -1302,6 +1305,37 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Neither grid nor load configured — misconfiguration, not outage.
             excess_power = 0.0
 
+        # --- Externally-managed load add-back ---
+        # Applied after all branch logic so it works regardless of inverter
+        # topology. See CONF_EXTERNAL_LOAD_POWER in const.py for the rationale.
+        #
+        # Only applied when excess_power is a real number: if the branch above
+        # returned None (sensor outage), adding to it would fabricate a
+        # trustworthy-looking figure out of missing data, and the optimizer's
+        # safety-only path depends on None propagating through untouched.
+        external_load_entity = data.get(CONF_EXTERNAL_LOAD_POWER)
+        if external_load_entity and excess_power is not None:
+            if self._external_load_has_priority(data):
+                _LOGGER.debug(
+                    "External load add-back skipped: priority override active "
+                    "(%s == %r)",
+                    data.get(CONF_EXTERNAL_LOAD_PRIORITY_ENTITY),
+                    data.get(CONF_EXTERNAL_LOAD_PRIORITY_STATE),
+                )
+            else:
+                # power=True normalises kW/MW sensors to watts automatically,
+                # so no unit assumption is baked in here.
+                external_load = _parse_sensor_float(
+                    self.hass, external_load_entity, power=True,
+                )
+                self._track_sensor_availability(external_load_entity, external_load)
+                if external_load is not None and external_load > 0:
+                    excess_power += external_load
+                    _LOGGER.debug(
+                        "External load add-back: +%.0fW (%s) -> excess %.0fW",
+                        external_load, external_load_entity, excess_power,
+                    )
+
         return PowerState(
             pv_production=pv_production,
             grid_export=grid_export,
@@ -1313,6 +1347,34 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ev_soc=None,
             timestamp=datetime.now(),
         )
+
+    def _external_load_has_priority(self, data: dict) -> bool:
+        """Return True when the external load's priority override is active.
+
+        The external controller (evcc, an OEM wallbox app, etc.) exposes an
+        entity reporting the user's requested mode. When that entity's state
+        matches the configured priority state, the user has explicitly asked
+        for maximum power to that load regardless of solar — so the add-back
+        in _build_power_state is skipped and this integration sees the real,
+        reduced excess.
+
+        Returns False when the feature is not configured, or when the entity
+        is missing/unavailable: the safe default is to apply the add-back
+        (this integration's own appliances keep priority), matching the
+        behaviour when no override entity is configured at all.
+
+        Comparison is case-insensitive and whitespace-trimmed on both sides,
+        since the raw mode value from the external system ("now", "PV",
+        "minpv") may not match how the user typed it into the config field.
+        """
+        priority_entity = data.get(CONF_EXTERNAL_LOAD_PRIORITY_ENTITY)
+        priority_state = data.get(CONF_EXTERNAL_LOAD_PRIORITY_STATE)
+        if not priority_entity or not priority_state:
+            return False
+        state = self.hass.states.get(priority_entity)
+        if state is None or state.state in _UNAVAILABLE_STATES:
+            return False
+        return state.state.strip().lower() == str(priority_state).strip().lower()
 
     # ------------------------------------------------------------------
     # Appliance configuration
