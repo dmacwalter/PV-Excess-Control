@@ -327,10 +327,7 @@ def _appliance_current_schema(defaults: dict[str, Any] | None = None) -> vol.Sch
             vol.Optional(
                 CONF_CHEAP_GRID_TARGET_CURRENT,
                 description={
-                    "suggested_value": d.get(
-                        CONF_CHEAP_GRID_TARGET_CURRENT,
-                        d.get(CONF_MAX_CURRENT, 16.0),
-                    )
+                    "suggested_value": d.get(CONF_CHEAP_GRID_TARGET_CURRENT)
                 },
             ): NumberSelector(
                 NumberSelectorConfig(
