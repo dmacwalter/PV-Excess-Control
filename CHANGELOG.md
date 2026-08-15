@@ -22,7 +22,7 @@ changes are intended to be offered back upstream.
 | Grid supplement (3 paths) | Activates on cheap tariff + power budget alone | Same, plus respects `battery_target_gated` |
 | Externally-managed loads (evcc etc.) | Counted as consumption; this integration yields to them | Optional add-back so this integration's appliances take priority instead — with an optional override to reverse it |
 | Cheap-window target current field | Pre-fills with `max_current` even when unset | Genuinely empty until deliberately set |
-| Forced grid charge vs. shedding | No way to guarantee a specific appliance sheds first | `shed_before_grid_charge` flag + one-cycle deferral |
+| Forced grid charge vs. shedding | No way to guarantee a specific appliance sheds first | `shed_before_grid_charge` flag + hold until the charge cycle resolves (0.3.2) |
 | Battery power during grid charge | Can be double-counted as "excess" | Grid-charge false-positive fix |
 | SHED near appliance deadlines | Reacts to instantaneous excess only | Deadline-aware shed protection via per-appliance averaged excess |
 | Appliance running post-deadline | No battery-state check | Blocked unless battery met its target |
@@ -169,6 +169,9 @@ Engagement is deferred one cycle so the freed power has a chance to register in
 `battery_power` first, avoiding a race where grid charge engages against stale
 readings.
 
+> **Superseded in 0.3.2.** The one-cycle deferral alone was not sufficient —
+> see section 8. The shed intent is now held until the charge cycle resolves.
+
 ### 5. Grid-charge false-positive fix
 
 Prevents battery power being credited back as "excess" while the battery is
@@ -198,8 +201,72 @@ window has closed.
 
 ---
 
+### 8. Battery-priority shed hold (0.3.2)
+
+**Problem.** The `shed_before_grid_charge` deferral (section 4) shed the
+appliance and waited one cycle before engaging grid charge, so the freed power
+could register. But `battery_priority_shed` was set in exactly one place and
+read in exactly one place, and **both required `is_on`**.
+`_get_appliance_states` rebuilds every `ApplianceState` each cycle without that
+field, so it defaulted to `False` on the cycle after a shed — and could not be
+re-set, because the setter requires the appliance to still be on.
+
+During the deferral cycle the optimizer therefore saw an ordinary OFF appliance
+plus excess that existed *only because that appliance had just been shed*, and
+restarted it via ALLOCATE. Observed in production as
+`Excess available (3822W >= 2010W needed)` one cycle after
+`Battery priority: min runtime met, freeing solar for battery`, followed by the
+appliance and the grid-charge state machine oscillating against each other —
+each spurious engagement costing a guaranteed 5 minutes of grid import via
+`grid_charge_engage_min_duration_minutes`.
+
+**Fix.**
+
+- `_battery_priority_hold: set[str]` tracks appliances currently held OFF, and
+  is persisted to `config_entry.data` via the runtime-state-key bypass (the
+  same no-reload pattern as `_grid_charge_engaged`). A restart mid-hold
+  previously dropped the intent and restarted the appliance on inflated excess.
+- `_get_appliance_states` carries `battery_priority_shed` forward from that set
+  instead of defaulting it to `False`.
+- The optimizer's battery-priority branch now handles the OFF case as well,
+  returning `IDLE` rather than falling through to ALLOCATE.
+- The hold releases on target SoC reached, past target time, or price no longer
+  cheap — deliberately **not** on "solar now covers target", which is circular:
+  solar only covers it because the appliance is being held off.
+- `_is_behind_deadline_raw()` mirrors the optimizer's deadline must-run test.
+  Appliances behind their runtime deadline are neither shed nor held, so
+  runtime commitments still win. Without this the two fight one cycle apart —
+  must-run turns the appliance on, the shed knocks it straight back off.
+
+**Note on scope.** This fixes the oscillation *after* a shed decision. It does
+not change when the shed fires: `_solar_can_fill_battery` remains a reactive
+per-cycle judgement, and `_balanced_strategy` in the planner is still
+deadline-unaware (a flat 50/50 split of each slot's excess that never reads
+`target_time`). Making the planner anticipate the battery deadline is a
+separate design change.
+
+---
+
 ## Testing status
 
+- **0.3.2:** the upstream `pytest` suite now runs — 888 passed. The 13
+  remaining failures and 1 error are pre-existing and byte-identical before and
+  after the change (the test environment resolves to HA 2025.1.4 while the
+  integration targets 2026.x); no regressions introduced.
+- **0.3.2:** 11 new tests in `tests/test_battery_priority_hold.py`, of which 5
+  fail against unpatched source. These are the first tests to cover
+  `battery_priority_shed`, `shed_before_grid_charge`, or the hold's persistence
+  across restarts — `grep` for any of them previously returned nothing.
+- **0.3.2:** the interaction was additionally exercised by driving the real
+  `Optimizer` through a simulation harness across ten edge cases plus
+  adversarial restart, starvation, cloud-flicker and engage-floor scenarios.
+  Headline results (before -> after): observed incident 3 -> 1 toggles;
+  marginal excess 13 -> 0; cloud flicker 15 -> 1 with grid import 0.107 -> 0.000
+  kWh; unreachable battery target 179 -> 1; restart mid-hold 2 -> 0. A
+  genuinely-needed grid charge still engages on the identical cycle.
+  Caveat: the harness modelled the real-time path of `_solar_can_fill_battery`,
+  not the Solcast forecast path that triggers it in production, so trigger
+  thresholds there will differ. The interaction is downstream of that decision.
 - All modified modules compile cleanly.
 - The external-load add-back decision table was verified in isolation across
   ten cases: PV mode, priority mode, case and whitespace variants, unavailable
