@@ -778,22 +778,43 @@ class Optimizer:
         # Battery-priority shed: coordinator flagged this appliance because it
         # has met its minimum runtime and shedding it would free enough solar
         # to fill the battery without grid import.
-        if state.battery_priority_shed and state.is_on:
-            _LOGGER.info(
-                "%s: battery-priority shed — minimum runtime met, "
-                "freeing solar for battery charging",
-                appliance.name,
-            )
+        # Battery-priority shed: coordinator flagged this appliance because
+        # shedding it frees solar for the battery ahead of its target time.
+        # The flag persists for the whole hold, not just the shedding cycle,
+        # so this must handle both states:
+        #   is_on  -> shed it now
+        #   is_off -> keep it off; do NOT fall through to ALLOCATE, which
+        #             would see the appliance's own freed load as available
+        #             excess and restart it one cycle after the shed.
+        # The coordinator clears the flag for an appliance that is behind its
+        # runtime deadline, so must-run commitments still win.
+        if state.battery_priority_shed:
+            if state.is_on:
+                _LOGGER.info(
+                    "%s: battery-priority shed — minimum runtime met, "
+                    "freeing solar for battery charging",
+                    appliance.name,
+                )
+                return (
+                    ControlDecision(
+                        appliance_id=appliance.id,
+                        action=Action.OFF,
+                        target_current=None,
+                        reason="Battery priority: min runtime met, freeing solar for battery",
+                        overrides_plan=False,
+                        bypasses_cooldown=True,
+                    ),
+                    -(state.current_power or 0),
+                )
             return (
                 ControlDecision(
                     appliance_id=appliance.id,
-                    action=Action.OFF,
+                    action=Action.IDLE,
                     target_current=None,
-                    reason="Battery priority: min runtime met, freeing solar for battery",
+                    reason="Battery priority: held off while battery charges to target",
                     overrides_plan=False,
-                    bypasses_cooldown=True,
                 ),
-                -(state.current_power or 0),
+                0.0,
             )
 
         # --- Already-ON appliances ---

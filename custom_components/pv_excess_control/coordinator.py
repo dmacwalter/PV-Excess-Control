@@ -309,6 +309,12 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._grid_charge_engaged: bool = config_entry.data.get("_grid_charge_engaged", False)
         self._grid_charge_engage_ts: float | None = None
         self._grid_charge_shed_pending_since: float | None = None
+        # Appliance IDs currently held OFF for battery priority. Persisted so an
+        # HA restart mid-hold does not release the pool onto inflated excess
+        # (the freed appliance load reads as available headroom for one cycle).
+        self._battery_priority_hold: set[str] = set(
+            config_entry.data.get("_battery_priority_hold", [])
+        )
         self._force_charge_prev: bool = self.force_charge
         self._latest_tariff = None
         self._latest_power_state = None
@@ -692,6 +698,44 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         new_data["_grid_charge_engaged"] = engaged
         self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
 
+    def _persist_battery_priority_hold(self) -> None:
+        """Persist the battery-priority hold set across restarts.
+
+        Uses the runtime-state-key bypass so this does not trigger a reload.
+        """
+        new_data = dict(self.config_entry.data)
+        new_data["_battery_priority_hold"] = sorted(self._battery_priority_hold)
+        self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+
+    def _is_behind_deadline(
+        self, config: ApplianceConfig, state: ApplianceState
+    ) -> bool:
+        """Convenience wrapper taking an ApplianceState."""
+        return self._is_behind_deadline_raw(config, state.runtime_today)
+
+    def _is_behind_deadline_raw(
+        self, config: ApplianceConfig, runtime_today: timedelta
+    ) -> bool:
+        """True if the appliance must run now to meet its daily runtime deadline.
+
+        Mirrors the optimizer's deadline must-run test so battery priority can
+        stand down for a commitment the optimizer is about to enforce anyway.
+        Without this the two fight one cycle apart: must-run turns the
+        appliance on, the battery-priority shed turns it straight back off.
+        """
+        if config.schedule_deadline is None or config.min_daily_runtime is None:
+            return False
+        if runtime_today >= config.min_daily_runtime:
+            return False
+        remaining = (config.min_daily_runtime - runtime_today).total_seconds()
+        now = datetime.now().time()
+        now_seconds = now.hour * 3600 + now.minute * 60 + now.second
+        deadline = config.schedule_deadline
+        deadline_seconds = deadline.hour * 3600 + deadline.minute * 60
+        if deadline_seconds <= now_seconds:
+            deadline_seconds += 86400
+        return (deadline_seconds - now_seconds) <= remaining * 1.1
+
     def auto_should_engage_now(self) -> bool:
         """Evaluate the auto-engage gate against the latest snapshots."""
         d = self.config_entry.data
@@ -767,6 +811,10 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 cfg = cfg_by_id.get(aid)
                 if not cfg or not cfg.shed_before_grid_charge:
                     continue
+                # Deadline must-run outranks battery priority: never shed an
+                # appliance the optimizer is about to force back on.
+                if self._is_behind_deadline(cfg, st):
+                    continue
                 if st.is_on and (st.current_power or 0) > 500:
                     shed_now.append(aid)
                     appliance_states[aid] = _dc.replace(
@@ -775,10 +823,16 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             if shed_now:
                 self._grid_charge_shed_pending_since = _time.monotonic()
+                hold = getattr(self, "_battery_priority_hold", None)
+                if hold is None:
+                    hold = self._battery_priority_hold = set()
+                if not hold.issuperset(shed_now):
+                    hold.update(shed_now)
+                    self._persist_battery_priority_hold()
                 solar_covers_target = True  # don't engage this cycle
                 _LOGGER.info(
                     "Shedding %s before considering grid charge; "
-                    "deferring engagement to next cycle",
+                    "holding OFF until battery reaches target or deadline passes",
                     shed_now,
                 )
             elif self._grid_charge_shed_pending_since is not None:
@@ -790,6 +844,18 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._grid_charge_shed_pending_since = None
                 if elapsed_since_shed < (self.update_interval.total_seconds() if self.update_interval else 30):
                     solar_covers_target = True
+
+        # Release the hold once battery priority no longer applies: target
+        # reached, past the target time, or price no longer cheap. Releasing on
+        # "solar now covers target" would be circular — solar only covers it
+        # *because* the appliance is being held off.
+        hold = getattr(self, "_battery_priority_hold", None)
+        if hold and not (cheap_now and soc_below_target):
+            _LOGGER.info(
+                "Releasing battery-priority hold on %s", sorted(hold),
+            )
+            hold.clear()
+            self._persist_battery_priority_hold()
 
         auto_should_engage = (
             auto_flag
@@ -1593,6 +1659,17 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ev_connected=ev_connected,
                 ev_soc=ev_soc,
                 activations_today=self._activations_today.get(config.id, 0),
+                # Carry the battery-priority hold forward. This flag was
+                # previously recomputed from scratch each cycle and could only
+                # be set while the appliance was still ON, so it was always
+                # False on the cycle after a shed — leaving the optimizer free
+                # to restart the appliance on excess that only existed because
+                # the appliance had just been shed. Deadline must-run still
+                # outranks the hold.
+                battery_priority_shed=(
+                    config.id in getattr(self, "_battery_priority_hold", ())
+                    and not self._is_behind_deadline_raw(config, runtime_today)
+                ),
             )
             states[config.id] = state
 
