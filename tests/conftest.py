@@ -281,6 +281,16 @@ def coordinator_factory():
         else:
             coord._inverter_ctl = None
 
+        # Fields added to the real __init__ after this fixture was written
+        # (grid-charge shed-before-charge bookkeeping + solar sufficiency
+        # cross-check). Default the solar check to "insufficient" so these
+        # coordinator-level tests exercise the price/SoC engage logic in
+        # isolation, matching their original intent; tests that specifically
+        # want to exercise solar sufficiency can override the patch.
+        coord._grid_charge_shed_pending_since = None
+        coord._battery_priority_hold = set()
+        coord._solar_can_fill_battery = MagicMock(return_value=False)
+
         return coord
 
     return _build

@@ -80,6 +80,7 @@ class Optimizer:
         min_battery_soc: float | None = None,
         force_charge: bool = False,
         auto_grid_charge_engaged: bool = False,
+        controller_interval_s: float = 30,
     ) -> OptimizerResult:
         """Run the optimization cycle and return decisions.
 
@@ -150,7 +151,11 @@ class Optimizer:
         # avg_budget fallback (the same branch as appliances with no
         # custom window).
         self._appliance_avg_excess: dict[str, float] = {}
-        controller_interval = 30  # default, used for window→entry count conversion
+        # Real controller cadence, passed in from the coordinator's
+        # update_interval. Previously hardcoded to 30s regardless of the
+        # configured controller interval, which silently doubled the
+        # effective averaging window at a 60s cadence (or halved it at 15s).
+        controller_interval = controller_interval_s if controller_interval_s and controller_interval_s > 0 else 30
         for app in appliances:
             if app.averaging_window is not None and app.averaging_window > 0:
                 # Calculate how many history entries fit in the custom window

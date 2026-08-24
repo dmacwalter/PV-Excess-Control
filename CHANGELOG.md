@@ -247,6 +247,42 @@ separate design change.
 
 ---
 
+### 9. Per-appliance averaging window used the wrong controller cadence (0.3.4)
+
+**Problem.** `Optimizer.optimize()` converted a per-appliance
+`averaging_window` (seconds) into a count of `power_history` entries with
+`entries_needed = int(averaging_window / controller_interval)`, but
+`controller_interval` was hardcoded to `30` and never received the real
+value from the coordinator's configured `controller_interval` (which
+defaults to 30s but is user-configurable — e.g. 60s in production here).
+
+At a 60s controller cadence this silently doubled the effective averaging
+window for any appliance with a custom `averaging_window` set: a configured
+5-minute window actually averaged the last 10 minutes of history. The one
+existing test for this path built its fixture history at 30s spacing, which
+happened to match the hardcoded constant, so it passed without exercising
+the real cadence.
+
+**Fix.** `optimize()` now accepts `controller_interval_s` (default `30`,
+preserving prior behaviour for any caller that doesn't pass it), and the
+coordinator passes its real `self.update_interval.total_seconds()` on every
+call.
+
+**Testing status.**
+
+- Full suite: 903 passed (901 pre-existing + 2 new), 0 failed.
+- Along the way, fixed three stale test-fixture gaps unrelated to production
+  code (hand-built coordinator mocks in `test_init.py` / `test_coordinator.py`
+  missing fields added to `__init__` after the fixtures were written; one
+  setup test leaking a real HA timer onto the event loop). None were
+  production defects — the real `__init__` path was correct throughout.
+- New: `tests/test_averaging_window_edge_cases.py` — two tests exercising a
+  real 60s controller cadence (rather than the previously-hardcoded-matching
+  30s), including a regression guard asserting the same `averaging_window`
+  yields a different, correctly-scaled result at 30s vs 60s.
+
+---
+
 ## Testing status
 
 - **0.3.2:** the upstream `pytest` suite now runs — 888 passed. The 13

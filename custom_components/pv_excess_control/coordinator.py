@@ -1106,6 +1106,9 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 min_battery_soc=min_battery_soc,
                 force_charge=self.force_charge,
                 auto_grid_charge_engaged=self._grid_charge_engaged,
+                controller_interval_s=(
+                    self.update_interval.total_seconds() if self.update_interval else 30
+                ),
             )
         except Exception as err:
             _LOGGER.error("Optimizer error: %s", err)

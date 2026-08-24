@@ -226,6 +226,7 @@ def _make_coordinator(
     coord._needed_by_others = set()
     coord._previous_is_on = {}
     coord._was_enabled = True
+    coord._startup_runtime_recovered = True
 
     # Inverter forced grid-charge state machine fields
     coord._inverter_ctl = None
@@ -1596,12 +1597,25 @@ class TestSetupAndUnload:
         ) as mock_forward:
             result = await async_setup_entry(hass, entry)
 
-        assert result is True
-        assert DOMAIN in hass.data
-        assert entry.entry_id in hass.data[DOMAIN]
-        assert isinstance(hass.data[DOMAIN][entry.entry_id], PvExcessCoordinator)
-        mock_refresh.assert_awaited_once()
-        mock_forward.assert_awaited_once_with(entry, PLATFORMS)
+        try:
+            assert result is True
+            assert DOMAIN in hass.data
+            assert entry.entry_id in hass.data[DOMAIN]
+            assert isinstance(hass.data[DOMAIN][entry.entry_id], PvExcessCoordinator)
+            mock_refresh.assert_awaited_once()
+            mock_forward.assert_awaited_once_with(entry, PLATFORMS)
+        finally:
+            # entry is a MagicMock, so entry.async_on_unload(cb) never actually
+            # runs cb. async_setup_entry registers a real
+            # homeassistant.helpers.event.async_track_time_change listener
+            # (midnight reset) against hass.loop; if we don't invoke the
+            # unsub callbacks it hands to async_on_unload, that timer stays
+            # live on the real event loop after the test ends and trips the
+            # HA test plugin's lingering-timer check on a later test.
+            for call in entry.async_on_unload.call_args_list:
+                unsub = call.args[0]
+                if callable(unsub):
+                    unsub()
 
     @pytest.mark.asyncio
     async def test_async_unload_entry_removes_data(self):
