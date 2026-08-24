@@ -338,6 +338,27 @@ real interval.
 
 ---
 
+### 11. Local brand icon (0.3.6)
+
+**Problem.** The integration's tile in Settings → Devices & Services showed
+"icon not available" — the logo added in 0.3.4 only lived in the GitHub
+README, which HA's frontend has no way to read. HA icons come either from
+the centralized `home-assistant/brands` repo (requires a separate PR there)
+or, since HA 2026.3, from a `brand/` folder shipped inside the integration
+itself.
+
+**Fix.** Added `custom_components/pv_excess_control/brand/` with
+`icon.png` (256×256), `icon@2x.png` (512×512), `logo.png`, and
+`logo@2x.png`, generated from the existing `logo.png`/`logo.svg` (transparent
+background, circular badge fully contained in-frame — already correctly
+composed for icon use). Local brand images take priority over the CDN
+automatically; no manifest or config changes needed. Requires HA 2026.3+ to
+take effect — on older HA the folder is silently ignored and the tile falls
+back to its previous "icon not available" state, so this is a safe no-op on
+older installs rather than a hard requirement bump.
+
+---
+
 ## Testing status
 
 - **0.3.2:** the upstream `pytest` suite now runs — 888 passed. The 13
