@@ -1,5 +1,7 @@
 <p align="center"><a href="README.md">English</a> · Deutsch</p>
 
+<p align="center"><img src="logo.png" alt="PV Excess Control Logo" width="160"></p>
+
 # PV Excess Control
 
 *Hinweis: Diese Übersetzung kann der englischen Version hinterherhinken — die [englische README](README.md) ist die maßgebliche Version.*

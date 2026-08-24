@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="sky" cx="35%" cy="28%" r="85%">
+      <stop offset="0%" stop-color="#1c3a52"/>
+      <stop offset="55%" stop-color="#0f2436"/>
+      <stop offset="100%" stop-color="#081420"/>
+    </radialGradient>
+    <linearGradient id="sunGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffe08a"/>
+      <stop offset="100%" stop-color="#ff9d3c"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2f6fa8"/>
+      <stop offset="100%" stop-color="#1a4f80"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffe08a"/>
+      <stop offset="100%" stop-color="#ffb347"/>
+    </linearGradient>
+    <linearGradient id="cell" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4fd1a5"/>
+      <stop offset="100%" stop-color="#22a878"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- badge background -->
+  <circle cx="128" cy="128" r="124" fill="url(#sky)" stroke="#0a1a28" stroke-width="4"/>
+
+  <!-- sun, upper right, low + warm -->
+  <g filter="url(#soft)">
+    <circle cx="176" cy="70" r="26" fill="url(#sunGlow)"/>
+    <g stroke="#ffcf7a" stroke-width="4" stroke-linecap="round">
+      <line x1="176" y1="26" x2="176" y2="14"/>
+      <line x1="176" y1="126" x2="176" y2="114"/>
+      <line x1="132" y1="70" x2="120" y2="70"/>
+      <line x1="220" y1="70" x2="232" y2="70"/>
+      <line x1="145" y1="39" x2="137" y2="31"/>
+      <line x1="207" y1="101" x2="215" y2="109"/>
+      <line x1="145" y1="101" x2="137" y2="109"/>
+      <line x1="207" y1="39" x2="215" y2="31"/>
+    </g>
+  </g>
+
+  <!-- solar panel array, tilted -->
+  <g filter="url(#soft)">
+    <path d="M56 158 L128 118 L200 158 L200 168 L56 168 Z" fill="url(#panel)" stroke="#0f3a5c" stroke-width="2"/>
+    <!-- panel cell grid -->
+    <g stroke="#0a2c47" stroke-width="1.6">
+      <line x1="82" y1="144" x2="82" y2="166"/>
+      <line x1="105" y1="132" x2="105" y2="166"/>
+      <line x1="128" y1="122" x2="128" y2="166"/>
+      <line x1="151" y1="132" x2="151" y2="166"/>
+      <line x1="174" y1="144" x2="174" y2="166"/>
+      <line x1="63" y1="156" x2="193" y2="156"/>
+    </g>
+    <!-- support strut -->
+    <rect x="122" y="168" width="12" height="14" fill="#132c40"/>
+  </g>
+
+  <!-- excess bolt flowing down from panel into battery -->
+  <path d="M133 182 L118 210 L131 210 L119 234 L152 200 L136 200 Z"
+        fill="url(#bolt)" stroke="#c97a1f" stroke-width="2" stroke-linejoin="round" filter="url(#soft)"/>
+
+  <!-- battery, base of badge -->
+  <g filter="url(#soft)">
+    <rect x="70" y="212" width="116" height="30" rx="6" fill="#0f2436" stroke="#4fd1a5" stroke-width="3"/>
+    <rect x="188" y="220" width="8" height="14" rx="2" fill="#4fd1a5"/>
+    <rect x="76" y="217" width="66" height="20" rx="3" fill="url(#cell)"/>
+  </g>
+</svg>

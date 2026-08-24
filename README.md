@@ -1,6 +1,8 @@
 <!-- IF YOU EDIT THIS FILE, also update README.de.md -->
 <p align="center"><a href="README.de.md">Deutsch</a> · English</p>
 
+<p align="center"><img src="logo.png" alt="PV Excess Control logo" width="160"></p>
+
 # PV Excess Control — dmacwalter fork
 
 **A comprehensive Home Assistant integration for intelligent solar excess power optimization and cheap grid tariff management.**
