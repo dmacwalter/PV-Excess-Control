@@ -24,6 +24,15 @@ MAX_CURRENT = 32.0
 MIN_PHASES = 1
 MAX_PHASES = 3
 
+# Largest per-appliance averaging_window a user can configure (seconds).
+# power_history must always retain enough samples to cover this, regardless
+# of the configured controller interval -- see _history_size_for_interval()
+# in coordinator.py. Previously the history buffer was capped at a flat 60
+# entries (MAX_HISTORY_SIZE), which happened to be generous at a 30-60s
+# controller interval but would silently under-cover a longer configured
+# averaging_window at a fast controller interval.
+MAX_AVERAGING_WINDOW = 1800  # 30 minutes, seconds
+
 
 class InverterType(StrEnum):
     """Inverter type."""

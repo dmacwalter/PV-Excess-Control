@@ -15,6 +15,7 @@ from datetime import time
 from zoneinfo import ZoneInfo
 
 from custom_components.pv_excess_control.const import (
+    DEFAULT_CONTROLLER_INTERVAL,
     DEFAULT_DYNAMIC_ON_THRESHOLD,
     DEFAULT_GRID_VOLTAGE,
     DEFAULT_OFF_THRESHOLD,
@@ -56,12 +57,18 @@ class Optimizer:
         enable_preemption: bool = True,
         off_threshold: int = DEFAULT_OFF_THRESHOLD,
         min_good_samples: int = 3,
+        controller_interval: int = DEFAULT_CONTROLLER_INTERVAL,
     ) -> None:
         self.grid_voltage = grid_voltage
         self._tz = ZoneInfo(timezone_str) if timezone_str else None
         self.enable_preemption = enable_preemption
         self._off_threshold = off_threshold
         self._min_good_samples = min_good_samples
+        # Real controller cadence in seconds, used to convert a per-appliance
+        # averaging_window (seconds) into a power_history entry count. Was
+        # previously hardcoded to 30 inside optimize() regardless of the
+        # coordinator's actual configured interval -- see CHANGELOG 0.3.4/0.3.5.
+        self._controller_interval = max(1, controller_interval)
         # Initialised here for safety; optimize() overwrites both on every cycle.
         self._plan_influence: str = "none"
         self._grid_supplement_count: int = 0
@@ -80,7 +87,7 @@ class Optimizer:
         min_battery_soc: float | None = None,
         force_charge: bool = False,
         auto_grid_charge_engaged: bool = False,
-        controller_interval_s: float = 30,
+        controller_interval_s: float | None = None,
     ) -> OptimizerResult:
         """Run the optimization cycle and return decisions.
 
@@ -151,15 +158,28 @@ class Optimizer:
         # avg_budget fallback (the same branch as appliances with no
         # custom window).
         self._appliance_avg_excess: dict[str, float] = {}
-        # Real controller cadence, passed in from the coordinator's
-        # update_interval. Previously hardcoded to 30s regardless of the
-        # configured controller interval, which silently doubled the
-        # effective averaging window at a 60s cadence (or halved it at 15s).
-        controller_interval = controller_interval_s if controller_interval_s and controller_interval_s > 0 else 30
+        # Real controller cadence, set on the Optimizer at construction time
+        # from the coordinator's update_interval. controller_interval_s is
+        # accepted as an optional per-call override for callers that don't
+        # (yet) construct the Optimizer with the right interval; otherwise
+        # falls back to self._controller_interval. Previously hardcoded to
+        # 30s unconditionally, which silently doubled the effective
+        # averaging window at a 60s cadence (or halved it at 15s).
+        controller_interval = (
+            controller_interval_s
+            if controller_interval_s and controller_interval_s > 0
+            else self._controller_interval
+        )
         for app in appliances:
             if app.averaging_window is not None and app.averaging_window > 0:
-                # Calculate how many history entries fit in the custom window
-                entries_needed = max(1, int(app.averaging_window / controller_interval))
+                # Calculate how many history entries fit in the custom
+                # window. math.ceil (not int/floor) so the window is never
+                # under-covered -- e.g. a 250s window at 60s cadence needs
+                # 5 entries (300s of coverage), not 4 (240s, short of what
+                # was configured).
+                entries_needed = max(
+                    1, math.ceil(app.averaging_window / controller_interval)
+                )
                 recent = power_history[-entries_needed:] if len(power_history) >= entries_needed else power_history
                 per_app_avg = self._calculate_average_excess(recent)
                 if per_app_avg is not None:
@@ -506,7 +526,19 @@ class Optimizer:
                     target_power = appliance.max_current * self.grid_voltage * phases
                     power_consumed = max(target_power - current_power, 0.0)
                 else:
-                    power_consumed = appliance.max_current * self.grid_voltage * phases
+                    # Keep the manual override active and pre-set max current,
+                    # but do not reserve power when the EV is explicitly
+                    # reported as disconnected. No vehicle means no additional
+                    # load can actually be created by this decision.
+                    ev_explicitly_disconnected = (
+                        appliance.ev_connected_entity
+                        and state.ev_connected is False
+                    )
+                    power_consumed = (
+                        0.0
+                        if ev_explicitly_disconnected
+                        else appliance.max_current * self.grid_voltage * phases
+                    )
                 return (
                     ControlDecision(
                         appliance_id=appliance.id,

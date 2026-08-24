@@ -133,6 +133,7 @@ from .const import (
     CONF_SWITCH_INTERVAL,
     CONF_TARIFF_PROVIDER,
     DEFAULT_CONTROLLER_INTERVAL,
+    MAX_AVERAGING_WINDOW,
     DEFAULT_GRID_CHARGE_ENGAGE_MIN_DURATION_MINUTES,
     DEFAULT_GRID_VOLTAGE,
     DEFAULT_OFF_THRESHOLD,
@@ -391,7 +392,7 @@ def _appliance_constraints_schema(
         ): NumberSelector(
             NumberSelectorConfig(
                 min=30,
-                max=1800,
+                max=MAX_AVERAGING_WINDOW,
                 step=30,
                 unit_of_measurement="s",
                 mode=NumberSelectorMode.BOX,

@@ -160,3 +160,56 @@ def test_averaging_window_entries_needed_scales_with_real_controller_interval():
         "budget for the same averaging_window -- controller_interval_s "
         "is not being used to scale entries_needed."
     )
+
+
+def test_averaging_window_entries_needed_uses_ceil_not_floor():
+    """Backported from Kolbi/PV-Excess-Control#12: entries_needed must round
+    UP (math.ceil), not truncate (int/floor). A 250s averaging_window at a
+    60s controller interval needs 5 entries (300s of coverage) to avoid
+    under-covering the configured window; int(250/60)=4 (240s) would fall
+    short of what was asked for.
+
+    History is built so the 5th-most-recent entry (the one only a ceil'd
+    5-entry window includes, and a floor'd 4-entry window would miss) has a
+    distinctly different value -- so floor vs ceil produce measurably
+    different averaged budgets and the test actually distinguishes them.
+    """
+    ev = _make_appliance(
+        id="ev", name="EV", priority=1, nominal_power=11000.0, phases=3,
+        dynamic_current=True, current_entity="number.wbec",
+        min_current=6.0, max_current=16.0, current_step=0.1,
+        is_big_consumer=True,
+    )
+    ev = dataclasses.replace(ev, averaging_window=250.0)
+    state = _make_state(id="ev", is_on=True, current_power=4140.0)
+    power = _make_power(excess=3000.0, pv=7140.0)
+
+    values = [1200.0, 1200.0, 1200.0, 1200.0, -800.0, 200.0, 200.0]
+    history = [
+        PowerState(
+            pv_production=v + 4140.0, grid_export=max(v, 0.0),
+            grid_import=max(-v, 0.0), load_power=4140.0, excess_power=v,
+            battery_soc=None, battery_power=None, ev_soc=None,
+            timestamp=_utcnow() - timedelta(seconds=60 * i),
+        )
+        for i, v in enumerate(values)
+    ]
+    history = list(reversed(history))  # oldest first, newest last
+
+    opt = _optimizer_for_tests(grid_voltage=230, off_threshold=-100, min_good_samples=1)
+    result = opt.optimize(
+        power_state=power, appliances=[ev], appliance_states=[state],
+        plan=_empty_plan(), power_history=history, tariff=_make_tariff(),
+        controller_interval_s=60,
+    )
+    decision = next(d for d in result.decisions if d.appliance_id == "ev")
+
+    # ceil(250/60) = 5 entries -> avg of [1200,1200,1200,1200,-800] = 800W.
+    # int(250/60) = 4 entries (the bug) -> avg of [1200,1200,1200,1200] = 1200W.
+    expected_amps_ceil = (800.0 + 4140.0) / (230 * 3)
+    buggy_amps_floor = (1200.0 + 4140.0) / (230 * 3)
+    assert abs(decision.target_current - expected_amps_ceil) < 0.3, (
+        f"Expected ~{expected_amps_ceil:.2f}A from the correct 5-entry/ceil "
+        f"average, got {decision.target_current:.2f}A (which would match "
+        f"the buggy 4-entry/floor average of ~{buggy_amps_floor:.2f}A)."
+    )

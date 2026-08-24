@@ -163,7 +163,10 @@ def coordinator_factory():
         TariffProvider as TariffProviderEnum,
         ForecastProvider as ForecastProviderEnum,
     )
-    from custom_components.pv_excess_control.coordinator import PvExcessCoordinator
+    from custom_components.pv_excess_control.coordinator import (
+        PvExcessCoordinator,
+        _history_size_for_interval,
+    )
     from custom_components.pv_excess_control.optimizer import Optimizer
     from custom_components.pv_excess_control.planner import Planner
     from custom_components.pv_excess_control.energy import create_tariff_provider
@@ -225,13 +228,19 @@ def coordinator_factory():
         coord.config_entry = entry
         coord.logger = MagicMock()
         coord.name = "pv_excess_control"
-        coord.update_interval = timedelta(seconds=DEFAULT_CONTROLLER_INTERVAL)
+        controller_interval = entry.data.get(
+            CONF_CONTROLLER_INTERVAL, DEFAULT_CONTROLLER_INTERVAL
+        )
+        coord.update_interval = timedelta(seconds=controller_interval)
 
         grid_voltage = entry.data.get(CONF_GRID_VOLTAGE, DEFAULT_GRID_VOLTAGE)
 
-        coord.optimizer = Optimizer(grid_voltage=grid_voltage)
+        coord.optimizer = Optimizer(
+            grid_voltage=grid_voltage, controller_interval=controller_interval
+        )
         coord.planner = Planner(grid_voltage=grid_voltage)
         coord.power_history = []
+        coord._max_history_size = _history_size_for_interval(controller_interval)
         coord._last_sensor_available = {}
         coord._last_appliance_configs = []
         coord.current_plan = None

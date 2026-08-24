@@ -284,6 +284,53 @@ class TestOptimizerAllocate:
         assert decision.action == Action.IDLE
         assert "disconnected" in decision.reason.lower()
 
+    def test_manual_override_off_ev_disconnected_reserves_no_power(self):
+        """Regression test (backported from Kolbi/PV-Excess-Control#12-adjacent
+        fix): a dynamic-current appliance with override_active=True, OFF, and
+        an ev_connected_entity reporting ev_connected=False must not reserve
+        max_current worth of power for a vehicle that isn't there. Previously
+        the manual-override/OFF branch always reserved
+        `max_current * grid_voltage * phases`, starving lower-priority
+        appliances of budget for a charger with nothing plugged in.
+        """
+        ev_charger = _make_appliance(
+            id="ev_charger", priority=1, dynamic_current=True,
+            current_entity="number.ev_current", min_current=6.0,
+            max_current=16.0, phases=1, override_active=True,
+            ev_connected_entity="binary_sensor.ev_connected",
+        )
+        pool = _make_appliance(id="pool", priority=2, nominal_power=1500.0)
+
+        ev_state = _make_state(id="ev_charger", is_on=False, ev_connected=False)
+        pool_state = _make_state(id="pool", is_on=False)
+
+        # 2000W excess: enough for the pool (1500W) but not for the phantom
+        # EV reservation (16A * 230V * 1 phase = 3680W) on top of it.
+        power = _make_power(excess=2000.0)
+
+        result = _optimizer_for_tests().optimize(
+            power_state=power,
+            appliances=[ev_charger, pool],
+            appliance_states=[ev_state, pool_state],
+            plan=_empty_plan(),
+            power_history=[power],
+            tariff=_make_tariff(),
+        )
+
+        decisions_by_id = {d.appliance_id: d for d in result.decisions}
+        # The EV charger still gets the override command (existing,
+        # unchanged behaviour) -- only its budget impact on other
+        # appliances is fixed.
+        assert decisions_by_id["ev_charger"].action == Action.SET_CURRENT
+        # The pool should NOT be starved by a disconnected EV's phantom
+        # 3680W reservation -- 2000W excess comfortably covers its 1500W.
+        assert decisions_by_id["pool"].action == Action.ON, (
+            f"Expected pool to turn ON using the 2000W excess; got "
+            f"{decisions_by_id['pool'].action} ({decisions_by_id['pool'].reason}). "
+            f"This indicates the disconnected EV's max_current is still being "
+            f"reserved against the budget."
+        )
+
     def test_manual_override_forces_on(self):
         """override_active=True, 0W excess -> ON with 'override' in reason."""
         optimizer = _optimizer_for_tests()

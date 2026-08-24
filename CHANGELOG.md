@@ -283,6 +283,61 @@ call.
 
 ---
 
+### 10. Backported fixes from Kolbi/PV-Excess-Control (0.3.5)
+
+While comparing against [Kolbi's independent fork](https://github.com/Kolbi/PV-Excess-Control),
+found they'd separately landed a fix for the same averaging-window bug as
+section 9 (their PR #12, merged five days before this fork's 0.3.4), plus an
+unrelated EV-budget fix. Backported both, with two refinements over the
+0.3.4 fix along the way:
+
+**a) `math.ceil()` instead of `int()` when converting `averaging_window` to
+an entry count.** `int()` truncates: a 250s window at a 60s controller
+interval gave 4 entries (240s of actual coverage), falling short of what was
+configured. `math.ceil()` gives 5 entries (300s), never under-covering the
+requested window.
+
+**b) `power_history` retention now scales with the real controller interval
+too.** The buffer was capped at a flat `MAX_HISTORY_SIZE = 60` entries
+(~30 min at a 30-60s interval) independent of `averaging_window`. The 0.3.4
+fix corrected the *conversion* from window to entry count, but a
+sufficiently long `averaging_window` at a fast controller interval could
+still be silently capped by this second, separate constant before the
+conversion ever got a chance to matter. Replaced with
+`_history_size_for_interval()`, which sizes the buffer to always cover the
+new `MAX_AVERAGING_WINDOW` constant (1800s) at whatever interval is
+configured.
+
+**c) EV-connected budget fix (unrelated to averaging windows).** A
+dynamic-current appliance with `override_active=True` and OFF unconditionally
+reserved `max_current * grid_voltage * phases` worth of budget for
+lower-priority appliances to work around -- even when its
+`ev_connected_entity` explicitly reported the vehicle disconnected. No
+vehicle plugged in means no load can actually be created, so this starved
+other appliances of budget for a charger with nothing attached. Fixed to
+reserve `0.0` in that specific case; the override command itself is
+unchanged (still sent, in case a vehicle connects mid-cycle).
+
+The `Optimizer` constructor now takes `controller_interval` directly
+(matching Kolbi's cleaner design) instead of the 0.3.4 per-call
+`controller_interval_s` parameter, which is retained only as an optional
+override for any caller not yet updated to construct the optimizer with the
+real interval.
+
+**Testing status.**
+
+- Full suite: 905 passed (903 pre-existing + 2 new), 0 failed.
+- New: `test_averaging_window_entries_needed_uses_ceil_not_floor` --
+  constructs history where a floor'd 4-entry window and a ceil'd 5-entry
+  window give measurably different averages, confirming the fix actually
+  takes effect rather than being masked by coincidentally-equal values.
+- New: `test_manual_override_off_ev_disconnected_reserves_no_power` --
+  verified to fail against the pre-fix code (a lower-priority pool appliance
+  gets starved of budget by a disconnected EV's phantom 3680W reservation)
+  before confirming it passes against the fix.
+
+---
+
 ## Testing status
 
 - **0.3.2:** the upstream `pytest` suite now runs — 888 passed. The 13

@@ -157,7 +157,10 @@ def _make_coordinator(
     states: dict[str, MockState] | None = None,
 ):
     """Create a PvExcessCoordinator with mocked HA."""
-    from custom_components.pv_excess_control.coordinator import PvExcessCoordinator
+    from custom_components.pv_excess_control.coordinator import (
+        PvExcessCoordinator,
+        _history_size_for_interval,
+    )
 
     if hass is None:
         hass = MockHass(states)
@@ -187,7 +190,12 @@ def _make_coordinator(
     from custom_components.pv_excess_control.planner import Planner
     from custom_components.pv_excess_control.energy import create_tariff_provider
 
-    coord.optimizer = Optimizer(grid_voltage=grid_voltage)
+    coord.optimizer = Optimizer(
+        grid_voltage=grid_voltage,
+        controller_interval=entry.data.get(
+            CONF_CONTROLLER_INTERVAL, DEFAULT_CONTROLLER_INTERVAL
+        ),
+    )
     coord.planner = Planner(grid_voltage=grid_voltage)
     coord.power_history = []
     coord._last_sensor_available = {}
@@ -201,6 +209,9 @@ def _make_coordinator(
     )
     coord._planner_counter = 0
     coord._startup_time = datetime.now()
+    coord._max_history_size = _history_size_for_interval(
+        entry.data.get(CONF_CONTROLLER_INTERVAL, DEFAULT_CONTROLLER_INTERVAL)
+    )
     coord._enabled = True
     coord._forecast_provider = None
     coord._last_tariff_info = None
@@ -1167,8 +1178,14 @@ class TestPowerHistory:
         assert coord.power_history[0].pv_production == 1000.0
 
     def test_history_max_size_enforced(self):
-        """History is capped at MAX_HISTORY_SIZE entries."""
-        from custom_components.pv_excess_control.coordinator import MAX_HISTORY_SIZE
+        """History is capped at the size needed to cover MAX_AVERAGING_WINDOW
+        at the coordinator's configured controller interval."""
+        from custom_components.pv_excess_control.coordinator import (
+            _history_size_for_interval,
+        )
+        from custom_components.pv_excess_control.const import DEFAULT_CONTROLLER_INTERVAL
+
+        max_history_size = _history_size_for_interval(DEFAULT_CONTROLLER_INTERVAL)
 
         coord = _make_coordinator(states={
             "sensor.pv_power": MockState("1000"),
@@ -1177,7 +1194,7 @@ class TestPowerHistory:
         })
 
         # Fill history beyond max
-        for i in range(MAX_HISTORY_SIZE + 20):
+        for i in range(max_history_size + 20):
             ps = PowerState(
                 pv_production=float(i),
                 grid_export=0.0,
@@ -1190,14 +1207,14 @@ class TestPowerHistory:
                 timestamp=datetime.now(),
             )
             coord.power_history.append(ps)
-            if len(coord.power_history) > MAX_HISTORY_SIZE:
+            if len(coord.power_history) > max_history_size:
                 coord.power_history.pop(0)
 
-        assert len(coord.power_history) == MAX_HISTORY_SIZE
+        assert len(coord.power_history) == max_history_size
         # Oldest entry should have been popped (first entry should be 20)
         assert coord.power_history[0].pv_production == 20.0
         assert coord.power_history[-1].pv_production == float(
-            MAX_HISTORY_SIZE + 20 - 1
+            max_history_size + 20 - 1
         )
 
 
@@ -1735,8 +1752,13 @@ class TestUpdateCycle:
 
     @pytest.mark.asyncio
     async def test_update_enforces_history_max_size(self):
-        """Update cycle enforces MAX_HISTORY_SIZE limit."""
-        from custom_components.pv_excess_control.coordinator import MAX_HISTORY_SIZE
+        """Update cycle enforces the interval-scaled history size limit."""
+        from custom_components.pv_excess_control.coordinator import (
+            _history_size_for_interval,
+        )
+        from custom_components.pv_excess_control.const import DEFAULT_CONTROLLER_INTERVAL
+
+        max_history_size = _history_size_for_interval(DEFAULT_CONTROLLER_INTERVAL)
 
         states = {
             "sensor.pv_power": MockState("1000"),
@@ -1746,7 +1768,7 @@ class TestUpdateCycle:
         coord = _make_coordinator(states=states)
 
         # Pre-fill history to just below max
-        for i in range(MAX_HISTORY_SIZE):
+        for i in range(max_history_size):
             coord.power_history.append(
                 PowerState(
                     pv_production=float(i),
@@ -1761,11 +1783,11 @@ class TestUpdateCycle:
                 )
             )
 
-        assert len(coord.power_history) == MAX_HISTORY_SIZE
+        assert len(coord.power_history) == max_history_size
 
-        # One more update should cap at MAX_HISTORY_SIZE
+        # One more update should cap at max_history_size
         await coord._async_update_data()
-        assert len(coord.power_history) == MAX_HISTORY_SIZE
+        assert len(coord.power_history) == max_history_size
 
     @pytest.mark.asyncio
     async def test_planner_counter_resets(self):
