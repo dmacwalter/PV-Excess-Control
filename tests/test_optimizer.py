@@ -2103,6 +2103,26 @@ class TestBypassesCooldownFlag:
         assert decision.bypasses_cooldown is True
         assert "Max daily runtime reached" in decision.reason
 
+    def test_max_daily_runtime_reason_rounds_to_nearest_second(self) -> None:
+        """The reason string should read '7:00:13 >= 7:00:00', not
+        '7:00:13.042882 >= 7:00:00' -- sub-second precision on a runtime
+        comparison is noise, not useful information, in a status/log
+        message a person is meant to read."""
+        from datetime import timedelta as td
+        from custom_components.pv_excess_control.const import Action
+
+        appliance = self._make_appliance(max_daily_runtime=td(hours=7))
+        state = self._make_state(
+            is_on=True, runtime_today=td(hours=7, seconds=13, microseconds=42882)
+        )
+        decision = self._run(appliance, state)
+        assert decision.action == Action.OFF
+        assert "." not in decision.reason, (
+            f"Expected no fractional-second precision in the reason, got: "
+            f"{decision.reason!r}"
+        )
+        assert "7:00:13 >= 7:00:00" in decision.reason
+
     def test_max_daily_activations_sets_flag(self) -> None:
         from custom_components.pv_excess_control.const import Action
 

@@ -359,6 +359,28 @@ older installs rather than a hard requirement bump.
 
 ---
 
+---
+
+### 12. Trim microsecond precision from the max-daily-runtime status message (0.3.7)
+
+**Problem.** The "Max daily runtime reached" status/log message
+interpolated `state.runtime_today` and `appliance.max_daily_runtime`
+(both `timedelta`) directly into an f-string, which renders as
+`str(timedelta)` -- e.g. `"7:00:13.042882 >= 7:00:00"`. The
+microsecond suffix comes from HA's controller-cycle timing jitter and
+carries no useful information for a person reading the pool pump's
+status history.
+
+**Fix.** Round both values to the nearest second before formatting:
+`timedelta(seconds=round(td.total_seconds()))`. Message now reads
+`"7:00:13 >= 7:00:00"`.
+
+**Testing status.** Full suite: 906 passed (905 pre-existing + 1 new),
+0 failed. New test asserts no `"."` appears in the rendered reason
+string.
+
+---
+
 ## Testing status
 
 - **0.3.2:** the upstream `pytest` suite now runs — 888 passed. The 13

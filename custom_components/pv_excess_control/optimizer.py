@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import time
+from datetime import time, timedelta
 from zoneinfo import ZoneInfo
 
 from custom_components.pv_excess_control.const import (
@@ -480,12 +480,17 @@ class Optimizer:
                 _LOGGER.info("Max daily runtime overrides on_only for %s", appliance.name)
             if appliance.override_active:
                 _LOGGER.info("Max daily runtime overrides manual override for %s", appliance.name)
+            # Round to the nearest second for display -- str(timedelta)
+            # otherwise shows microseconds (e.g. "7:00:13.042882"), which
+            # is more precision than useful in a status/log message.
+            runtime_display = timedelta(seconds=round(state.runtime_today.total_seconds()))
+            max_runtime_display = timedelta(seconds=round(appliance.max_daily_runtime.total_seconds()))
             return (
                 ControlDecision(
                     appliance_id=appliance.id,
                     action=Action.OFF,
                     target_current=None,
-                    reason=f"Max daily runtime reached ({state.runtime_today} >= {appliance.max_daily_runtime})",
+                    reason=f"Max daily runtime reached ({runtime_display} >= {max_runtime_display})",
                     overrides_plan=False,
                     bypasses_cooldown=True,
                 ),
