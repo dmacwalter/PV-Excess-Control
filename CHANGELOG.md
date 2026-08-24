@@ -381,6 +381,52 @@ string.
 
 ---
 
+---
+
+### 13. Documentation audit: fix stale upstream references, fill undocumented fork features (0.3.8)
+
+**Problem.** `docs/installation.md`, `docs/advanced/troubleshooting.md`,
+and `manifest.json`'s `codeowners`/`documentation`/`issue_tracker` fields
+all still pointed at `InventoCasa/PV-Excess-Control` rather than this fork
+-- `manifest.json`'s fields in particular are what HA's integration-page
+"?" button and "Documentation" link actually use, so they silently sent
+anyone clicking those to the upstream repo instead of this one.
+
+Separately, five things this fork added since diverging from upstream had
+**no documentation anywhere** in `docs/`:
+
+- `battery_target_gated` (blocks fast-charge preemption once battery's hit target)
+- `shed_before_grid_charge` (shed an appliance before forcing grid charge)
+- The externally-managed-load add-back (evcc/external EV charger surplus correction)
+- The averaging-window ↔ controller-interval relationship (the exact thing 0.3.5 fixed)
+- The EV-disconnected budget behaviour from 0.3.5
+
+Worse, `docs/configuration/sensor-mapping.md` actively contradicted the
+current code: it stated *"Battery power is not added to the excess
+calculation"*, which hasn't been true since this fork's very first commit.
+
+**Fix.**
+
+- `docs/installation.md`, `docs/advanced/troubleshooting.md`,
+  `manifest.json`: repointed at `dmacwalter/PV-Excess-Control`.
+  `docs/installation.md` also gets an explicit "this is the dmacwalter
+  fork, see InventoCasa for upstream" pointer at the top.
+- `docs/configuration/sensor-mapping.md`: corrected the battery_power
+  claim, documented the actual sign convention and the
+  grid-charge-engaged exception, and added a full "Externally-Managed
+  Load Add-Back" section covering the sensor + priority-entity/state
+  fields.
+- `docs/features/battery-management.md`: added "Shed Before Grid
+  Charge" and "Battery Target Gated" sections under Grid Charging.
+- `docs/configuration/adding-appliances.md`: expanded "Averaging
+  Window" to explain the `ceil(window / controller_interval)`
+  conversion, and expanded "EV-Specific Fields" to cover the
+  manual-override/disconnected-EV budget behaviour from 0.3.5.
+
+No Python logic changed; 906 tests unaffected.
+
+---
+
 ## Testing status
 
 - **0.3.2:** the upstream `pytest` suite now runs — 888 passed. The 13

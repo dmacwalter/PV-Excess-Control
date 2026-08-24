@@ -48,7 +48,18 @@ The optimizer will adjust current up and down every cycle to precisely consume a
 | **EV Connected Sensor** | A binary sensor -- True when the car is plugged in |
 | **EV Target SoC** | Target battery percentage (e.g., 80). Charging stops when the EV's SoC reaches or exceeds this value. |
 
-When the EV is not connected, the appliance is automatically skipped. When SoC reaches the configured target, charging stops.
+When the EV is not connected, the appliance is automatically skipped (IDLE, "disconnected") and doesn't consume any power budget.
+
+> **Manual-override appliances:** if you've also enabled **Override Active**
+> on a dynamic-current appliance with an EV Connected Sensor configured, the
+> override command itself is still sent even while the EV shows
+> disconnected — this integration doesn't second-guess an explicit manual
+> override. However, since a disconnected EV can't actually draw any power
+> regardless of what current is commanded, no power budget is reserved
+> against it in that case, so lower-priority appliances aren't starved
+> waiting for a charger with nothing plugged in.
+
+When the EV's SoC reaches the configured target, charging stops.
 
 ---
 
@@ -90,9 +101,20 @@ Use this to chain appliances. For example, a heat pump circulation pump that sho
 
 | Field | Description |
 |-------|-------------|
-| **Averaging Window** | Custom history window in seconds for excess power averaging (overrides the global default) |
+| **Averaging Window** | Custom history window in seconds for excess power averaging (overrides the global default). Range 30–1800s. |
 
 By default, the optimizer averages excess power over a recent history window to smooth sensor noise. Set a custom averaging window per appliance if you need a longer or shorter smoothing period (e.g., a shorter window for fast-reacting appliances like EV chargers).
+
+The window is converted into a number of history samples using your
+configured **Controller Update Interval** (in the integration's Global
+Settings step, not per-appliance): `samples = ceil(averaging_window / controller_interval)`,
+rounded up so the actual window covered is never *less* than what you
+configured. For example, at a 60-second controller interval, a 300-second
+averaging window uses the 5 most recent samples; the same 300-second window
+at a 30-second interval uses 10. You don't need to account for this
+yourself — set the duration you want and it adapts to whatever interval
+you're running — but it's worth knowing if you're comparing behaviour
+across two setups running at different controller intervals.
 
 ---
 

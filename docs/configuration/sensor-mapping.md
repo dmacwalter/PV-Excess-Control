@@ -34,6 +34,16 @@ excess = grid_export - grid_import
 ```
 (The import/export sensor value is split into its import and export components.)
 
+For hybrid inverters, `battery_power` is then added back on top: `positive`
+(charging, absorbing solar) increases excess, `negative` (discharging)
+decreases it — this recovers the solar that's going into the battery rather
+than the grid, which the plain export figure alone doesn't show. **Exception:**
+while forced grid charge is actively engaged, this credit is skipped —
+`battery_power` is positive because the battery is charging *from the grid*,
+not from solar, and `grid_import` already reflects that draw; adding
+`battery_power` on top in that situation would double-count it and make a
+grid-charge cycle look like real solar surplus.
+
 **If Grid Export sensor only:**
 ```
 excess = grid_export
@@ -45,7 +55,39 @@ excess = grid_export
 excess = pv_production - load_power
 ```
 
-Note: Battery power is **not** added to the excess calculation. The battery's effect on excess is already reflected in the grid import/export or load values that the inverter reports.
+---
+
+## Externally-Managed Load Add-Back
+
+If a large load is controlled by **another system** rather than this
+integration — most commonly an EV charger run by evcc, or an OEM wallbox
+app — it still shows up in your grid meter. That makes solar surplus look
+like it's vanished, so this integration backs its own appliances off and
+the external controller ends up with all of it.
+
+| Field | Description |
+|-------|-------------|
+| **Externally-Managed Load Power Sensor** | Power sensor for the external load (W or kW, converted automatically) |
+| **External Load Priority Mode Entity** | Optional. Entity reporting the external controller's current mode (e.g. evcc's charge-mode select) |
+| **Priority Mode State Value** | Optional, required if the entity above is set. The exact state value meaning "priority mode is active" (for evcc: `now`, the raw mode behind the Fast Charge button — not the UI label). Case-insensitive. |
+
+Setting the power sensor adds that load's draw back onto the surplus
+figure, so this integration's own appliances (pool, hot water, etc.) get
+priority over the external load — the external controller only gets what's
+left over. Leave it empty if you'd rather the external load win, or if you
+don't have one.
+
+The optional priority-entity/state pair lets a deliberate "charge now" /
+fast-charge request on the external system temporarily reverse that: while
+the entity reports the priority-mode state, the add-back is skipped, so
+this integration sees the genuinely reduced surplus and sheds its own
+appliances out of the way instead of fighting the explicit request. The two
+fields must be set together — configuring one without the other is
+rejected by the config flow.
+
+This add-back is applied after all excess-power branch logic above, so it
+works the same way regardless of which sensor combination (Import/Export,
+Grid Export, or PV + Load) you're using.
 
 ---
 

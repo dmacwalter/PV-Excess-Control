@@ -1,5 +1,10 @@
 # Installation
 
+> **This is the `dmacwalter` fork.** For upstream InventoCasa instead, see
+> `https://github.com/InventoCasa/PV-Excess-Control`. See the top-level
+> [CHANGELOG.md](../CHANGELOG.md) for what this fork adds/fixes on top of
+> upstream.
+
 ## Requirements
 
 - Home Assistant **2025.8** or newer
@@ -10,9 +15,11 @@
 
 ## Install via HACS (Recommended)
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=dmacwalter&repository=PV-Excess-Control&category=integration)
+
 1. In your Home Assistant sidebar, open **HACS**.
 2. Click the three-dot overflow menu (top right) and choose **Custom repositories**.
-3. Paste `https://github.com/InventoCasa/PV-Excess-Control` and set the category to **Integration**, then click **Add**.
+3. Paste `https://github.com/dmacwalter/PV-Excess-Control` and set the category to **Integration**, then click **Add**.
 4. In the HACS integration list, search for **PV Excess Control** and click **Download**.
 5. When prompted, choose the latest version and confirm.
 6. **Restart Home Assistant** (Developer Tools → Restart, or via Settings → System → Restart).
@@ -22,7 +29,7 @@
 
 ## Manual Installation
 
-1. Download the latest release ZIP from the [GitHub releases page](https://github.com/InventoCasa/PV-Excess-Control/releases).
+1. Download the latest release ZIP from the [GitHub releases page](https://github.com/dmacwalter/PV-Excess-Control/releases).
 2. Extract the archive and copy the `custom_components/pv_excess_control` folder into your Home Assistant `config/custom_components/` directory.
 
    Your directory structure should look like:

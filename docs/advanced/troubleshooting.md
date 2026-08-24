@@ -117,7 +117,7 @@ If the above does not resolve your issue:
 
 1. Enable debug logging and reproduce the problem
 2. Download diagnostics
-3. Open an issue at [GitHub Issues](https://github.com/InventoCasa/PV-Excess-Control/issues) with:
+3. Open an issue at [GitHub Issues](https://github.com/dmacwalter/PV-Excess-Control/issues) with:
    - Home Assistant version
    - Integration version
    - Relevant log lines

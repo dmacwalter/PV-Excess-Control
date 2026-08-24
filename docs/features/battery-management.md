@@ -38,6 +38,22 @@ Example: EV and battery both need charging by 7 am. Cheapest grid hours are 01:0
 
 Grid charging only activates when the tariff is below the **Battery Charge Price Threshold**.
 
+### Shed Before Grid Charge
+
+Per-appliance flag: **Shed Before Grid Charge**. When enabled, this appliance is always turned off before forced grid charge is allowed to engage — regardless of its own minimum daily runtime commitment.
+
+Without this, forced grid charge could engage while a lower-priority appliance is still consuming the solar that would otherwise go toward the battery target, forcing more (and more expensive) grid import than necessary. Enable it on appliances you're happy to briefly interrupt in favour of hitting the battery's charge deadline (e.g. a pool pump), and leave it off for appliances with a hard runtime commitment you don't want grid charging to override.
+
+### Battery Target Gated
+
+Per-appliance flag: **Block Fast-Charge Preemption Once Battery Full**.
+
+This is for appliances that command an inverter to charge directly (e.g. a "fast charge" switch) rather than being wattage-limited to actual solar excess. Normally, if shedding a lower-priority appliance frees up enough PV budget on paper, preemption switches this kind of appliance on — but because it isn't itself wattage-limited, it may then pull whatever it needs from the grid, not just the solar that was freed.
+
+Enabling this flag blocks that preemption once the battery has already reached its target SoC, so a full battery won't trigger unnecessary grid import just because shedding something else freed up nominal capacity on paper. It also blocks the separate cheap-tariff grid-supplement paths for the same reason.
+
+Leave this off for normal wattage-modulated appliances (pool pumps, standard EV chargers) — it's specifically for switches that aren't self-limiting.
+
 ---
 
 ## Battery Discharge Protection
