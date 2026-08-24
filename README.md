@@ -176,6 +176,13 @@ work). State matching is case- and whitespace-insensitive.
 
 ### HACS
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=dmacwalter&repository=PV-Excess-Control&category=integration)
+
+Click the button above if your Home Assistant instance is reachable from this
+device and has the [My Home Assistant](https://www.home-assistant.io/integrations/my/)
+integration enabled — it opens HACS directly to this repository's add-custom-repository
+dialog. Otherwise, add it manually:
+
 1. Open HACS in your Home Assistant sidebar
 2. Click the three-dot menu and select **Custom repositories**
 3. Add `https://github.com/dmacwalter/PV-Excess-Control` as an **Integration**

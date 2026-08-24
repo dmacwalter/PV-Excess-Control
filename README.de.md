@@ -61,9 +61,16 @@ Diese Integration ist Open Source, weil ich daran glaube, der Community, die Hom
 
 ### HACS (Empfohlen)
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=dmacwalter&repository=PV-Excess-Control&category=integration)
+
+Klicke auf den Button oben, falls deine Home Assistant-Instanz von diesem Gerät
+aus erreichbar ist und die [My Home Assistant](https://www.home-assistant.io/integrations/my/)-Integration
+aktiviert ist — er öffnet HACS direkt im Dialog zum Hinzufügen dieses
+Repositories als benutzerdefiniertes Repository. Andernfalls manuell hinzufügen:
+
 1. Öffne HACS in deiner Home Assistant Seitenleiste
 2. Klicke auf das Drei-Punkte-Menü und wähle **Benutzerdefinierte Repositories** (Custom repositories)
-3. Füge `https://github.com/InventoCasa/PV-Excess-Control` als **Integration** hinzu
+3. Füge `https://github.com/dmacwalter/PV-Excess-Control` als **Integration** hinzu
 4. Suche nach "PV Excess Control" und klicke auf **Herunterladen**
 5. Starte Home Assistant neu
 6. Gehe zu **Einstellungen → Geräte & Dienste → Integration hinzufügen** und suche nach **PV Excess Control**
