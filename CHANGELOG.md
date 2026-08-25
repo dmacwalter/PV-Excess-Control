@@ -427,8 +427,65 @@ No Python logic changed; 906 tests unaffected.
 
 ---
 
+### 14. Slack-aware minimum runtime (0.3.9)
+
+**Problem.** The SHED guard on `min_daily_runtime` was absolute — an appliance
+below its daily total was never shed:
+
+```python
+if (not force_shed
+        and appliance.min_daily_runtime is not None
+        and state.runtime_today < appliance.min_daily_runtime):
+    continue
+```
+
+A daily runtime requirement is a *total*, not a block, but this forced it to be
+served as one contiguous run: the appliance could not be interrupted until the
+whole amount was banked.
+
+Observed 2026-08-23: the pool ran unbroken from 08:46:35 until
+`Max daily runtime reached (7:00:00 >= 7:00:00)` at 15:46:38, straight through
+a 13.5 kW house peak, with hours of operating window still available to make
+the runtime up later. Seen again 2026-08-25 at 10:44:01, when instantaneous
+excess reached -1344 W and the pool — 2h15m into a 3h minimum, window open
+until 17:20 — was not even a shed candidate despite roughly four hours of
+slack.
+
+**Fix.** `_runtime_slack_seconds()` returns the spare time remaining after
+reserving the outstanding runtime plus a 10% buffer:
+
+    slack = time_until_deadline - (remaining_runtime * 1.1)
+
+Positive slack means the appliance is merely mid-block and may be shed; zero or
+negative means it is genuinely behind and is protected. The effective deadline
+is `schedule_deadline` when set, otherwise `end_before` — runtime can only
+accrue inside the operating window, so that is the real cut-off. When neither
+is configured slack is unknowable and the previous conservative behaviour is
+kept. `force_charge` still bypasses the guard entirely, as before.
+
+The 10% buffer and the overnight wraparound deliberately mirror the deadline
+must-run arithmetic in `_allocate_appliance`. The two must agree: if SHED and
+must-run disagree about whether an appliance is behind, they fight one cycle
+apart — must-run turns it on, SHED knocks it straight back off.
+
+`shed_sort_key` is unchanged, so appliances that have already met their minimum
+are still preferred as shed candidates over those that have not.
+
+**Consequence.** Appliances with a daily minimum will cycle more than before,
+because they can now be interrupted mid-block for the first time. This is the
+intended trade — runtime is deferred, not lost — but it is the most
+behaviourally visible change in this release. Watch toggle counts on marginal
+days; equipment with compressors (pool heat pumps) is the main concern.
+
+---
+
 ## Testing status
 
+- **0.3.9:** full suite 915 passed, zero failures. 9 new tests in
+  `tests/test_runtime_slack.py`, of which 8 fail against unpatched 0.3.8 —
+  covering the slack boundaries (met, behind, overnight deadline, window-end
+  fallback, no deadline configured, 10% buffer) plus two end-to-end cases that
+  drive the real `Optimizer` and assert SHED's candidate set actually changes.
 - **0.3.2:** the upstream `pytest` suite now runs — 888 passed. The 13
   remaining failures and 1 error are pre-existing and byte-identical before and
   after the change (the test environment resolves to HA 2025.1.4 while the

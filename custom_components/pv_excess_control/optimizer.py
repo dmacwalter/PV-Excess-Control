@@ -1690,6 +1690,53 @@ class Optimizer:
     # Phase 3: SHED
     # ------------------------------------------------------------------
 
+    def _runtime_slack_seconds(
+        self,
+        appliance: ApplianceConfig,
+        state: ApplianceState,
+    ) -> float | None:
+        """Seconds of spare time left to finish an appliance's daily runtime.
+
+        A daily runtime requirement does not have to be served as one
+        contiguous block — only the total before the appliance runs out of day
+        matters. This returns how much slack remains after reserving the
+        outstanding runtime plus the same 10% buffer the deadline must-run
+        applies, so SHED can release an appliance that is merely mid-block
+        while still protecting one that is genuinely behind.
+
+        The effective deadline is schedule_deadline when set, otherwise
+        end_before: runtime can only accrue inside the operating window, so
+        that is the real cut-off. Returns None when the requirement is already
+        met, when no minimum is configured, or when neither deadline nor
+        window end exists and slack therefore cannot be reasoned about.
+
+        Positive = spare time available, safe to shed.
+        Zero or negative = behind schedule, protect it.
+        """
+        if appliance.min_daily_runtime is None or state is None:
+            return None
+        if state.runtime_today >= appliance.min_daily_runtime:
+            return None  # already met; the sort key handles preference
+
+        deadline = appliance.schedule_deadline or appliance.end_before
+        if deadline is None:
+            return None
+
+        from datetime import datetime
+        now = datetime.now(self._tz) if self._tz else datetime.now()
+        now_seconds = now.hour * 3600 + now.minute * 60 + now.second
+        deadline_seconds = deadline.hour * 3600 + deadline.minute * 60
+        if deadline_seconds <= now_seconds:
+            # Overnight: point at the next occurrence, matching the must-run
+            # arithmetic in _allocate_appliance. The two must agree, or SHED
+            # and must-run fight one cycle apart.
+            deadline_seconds += 86400
+
+        remaining_runtime = (
+            appliance.min_daily_runtime - state.runtime_today
+        ).total_seconds()
+        return (deadline_seconds - now_seconds) - (remaining_runtime * 1.1)
+
     def _deadline_passed(self, deadline: time) -> bool:
         """Return True if the given time-of-day deadline has already
         passed for "today" — i.e. current clock time is at or past it.
@@ -1801,18 +1848,45 @@ class Optimizer:
             if instant_budget >= self._off_threshold:
                 break
 
-            # Hard min_runtime constraint: don't shed if minimum not met
-            # (bypassed during force_charge to prioritise battery charging)
+            # Min-runtime protection, slack-aware.
+            #
+            # This was previously absolute: an appliance below its
+            # min_daily_runtime was never shed, which forced the requirement to
+            # be served as one contiguous block from first start — it could not
+            # be interrupted until the whole total was banked. That is the wrong
+            # behaviour during a house peak, when the runtime could just as well
+            # be made up later in the day.
+            #
+            # Now it is protected only when actually behind: if enough of the
+            # day remains to finish the outstanding runtime (plus the same 10%
+            # buffer the deadline must-run applies), it may be shed and picked
+            # up later. Deadline must-run remains the backstop that forces it
+            # back on once slack runs out, and shed_sort_key still prefers
+            # shedding appliances that have already met their minimum.
+            # (All of this is bypassed during force_charge, as before.)
             state = state_by_id.get(app_id)
-            if (not force_shed
-                    and appliance.min_daily_runtime is not None
-                    and state is not None
-                    and state.runtime_today < appliance.min_daily_runtime):
-                _LOGGER.debug(
-                    "  Skipping shed of %s: min_runtime not met (%s < %s)",
-                    appliance.name, state.runtime_today, appliance.min_daily_runtime,
-                )
-                continue
+            if not force_shed and state is not None:
+                slack = self._runtime_slack_seconds(appliance, state)
+                if slack is not None and slack <= 0:
+                    _LOGGER.debug(
+                        "  Skipping shed of %s: behind daily runtime "
+                        "(%s < %s), no slack before deadline",
+                        appliance.name, state.runtime_today,
+                        appliance.min_daily_runtime,
+                    )
+                    continue
+                if (slack is None
+                        and appliance.min_daily_runtime is not None
+                        and state.runtime_today < appliance.min_daily_runtime):
+                    # No deadline or window end configured, so slack is
+                    # unknowable — keep the original conservative behaviour.
+                    _LOGGER.debug(
+                        "  Skipping shed of %s: min_runtime not met (%s < %s), "
+                        "no deadline to compute slack against",
+                        appliance.name, state.runtime_today,
+                        appliance.min_daily_runtime,
+                    )
+                    continue
 
             # Deadline-aware shed protection: if this appliance has a
             # schedule_deadline that hasn't passed yet, and it has an
