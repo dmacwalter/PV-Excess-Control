@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_change
 
-from .const import CONF_BATTERY_STRATEGY, DOMAIN
+from .const import CONF_AUTO_BATTERY_GRID_CHARGE, CONF_BATTERY_STRATEGY, DOMAIN
 from .coordinator import PvExcessCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ PLATFORMS: list[Platform] = [
 _RUNTIME_STATE_KEYS = frozenset({
     "control_enabled", "force_charge", CONF_BATTERY_STRATEGY,
     "disabled_appliances", "overridden_appliances",
-    "_grid_charge_engaged",
+    "_grid_charge_engaged", "_battery_priority_hold", CONF_AUTO_BATTERY_GRID_CHARGE,
 })
 
 

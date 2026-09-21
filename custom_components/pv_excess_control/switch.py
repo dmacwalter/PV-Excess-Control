@@ -11,7 +11,14 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_APPLIANCE_NAME, CONF_BATTERY_GRID_CHARGE_POWER_W, DOMAIN, MANUFACTURER
+from .const import (
+    CONF_APPLIANCE_NAME,
+    CONF_AUTO_BATTERY_GRID_CHARGE,
+    CONF_BATTERY_GRID_CHARGE_POWER_W,
+    CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY,
+    DOMAIN,
+    MANUFACTURER,
+)
 from .coordinator import PvExcessCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,6 +36,10 @@ async def async_setup_entry(
         ControlEnabledSwitch(coordinator),
         ForceChargeSwitch(coordinator),
     ]
+
+    # Only meaningful when an inverter force-charge entity is configured.
+    if config_entry.data.get(CONF_INVERTER_FORCE_CHARGE_ENABLE_ENTITY):
+        entities.append(AutoGridChargeSwitch(coordinator))
 
     # Per-appliance switches
     subentries = getattr(config_entry, "subentries", {})
@@ -134,6 +145,37 @@ class ForceChargeSwitch(_PvExcessSwitchBase):
             self.coordinator._grid_charge_engaged = False
             self.coordinator._grid_charge_engage_ts = None
             self.coordinator._persist_grid_charge_state(False)
+        self.async_write_ha_state()
+
+
+class AutoGridChargeSwitch(_PvExcessSwitchBase):
+    """Runtime toggle for automatic battery grid charge in cheap windows.
+
+    Mirrors the auto_battery_grid_charge option, so the options flow and
+    this switch always agree.
+    """
+
+    _attr_name = "Auto Grid Charge"
+    _attr_icon = "mdi:transmission-tower-import"
+
+    def __init__(self, coordinator: PvExcessCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_auto_grid_charge"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(
+            self.coordinator.config_entry.data.get(CONF_AUTO_BATTERY_GRID_CHARGE, False)
+        )
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self._persist(CONF_AUTO_BATTERY_GRID_CHARGE, True)
+        await self.coordinator.async_set_auto_grid_charge(True)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self._persist(CONF_AUTO_BATTERY_GRID_CHARGE, False)
+        await self.coordinator.async_set_auto_grid_charge(False)
         self.async_write_ha_state()
 
 

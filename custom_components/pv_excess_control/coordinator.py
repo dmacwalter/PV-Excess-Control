@@ -747,6 +747,38 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             deadline_seconds += 86400
         return (deadline_seconds - now_seconds) <= remaining * 1.1
 
+    async def async_set_auto_grid_charge(self, enabled: bool) -> None:
+        """Apply a runtime change to auto battery grid charge.
+
+        The flag itself lives in config_entry.data (the switch persists it
+        there, and it is a runtime-state key so no reload happens). Turning
+        it off takes effect immediately rather than waiting for the minimum
+        engage duration: the inverter is disengaged unless the manual
+        force_charge switch is holding it on, and any battery-priority hold
+        is released so held appliances can run again on the next cycle.
+        """
+        if enabled:
+            return
+        if (
+            self._grid_charge_engaged
+            and self._inverter_ctl is not None
+            and not self.force_charge
+        ):
+            await self._inverter_ctl.disengage()
+            self._grid_charge_engaged = False
+            self._grid_charge_engage_ts = None
+            self._persist_grid_charge_state(False)
+            _LOGGER.info("Auto grid charge switched off; disengaged inverter force-charge")
+        self._grid_charge_shed_pending_since = None
+        hold = getattr(self, "_battery_priority_hold", None)
+        if hold:
+            _LOGGER.info(
+                "Auto grid charge switched off; releasing battery-priority hold on %s",
+                sorted(hold),
+            )
+            hold.clear()
+            self._persist_battery_priority_hold()
+
     def auto_should_engage_now(self) -> bool:
         """Evaluate the auto-engage gate against the latest snapshots."""
         d = self.config_entry.data
@@ -813,7 +845,9 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # (_grid_charge_shed_pending_since), so we never shed and engage in
         # the same breath — the freed power needs a cycle to actually show
         # up in battery_power before we trust solar_covers_target again.
-        if not solar_covers_target and cheap_now and soc_below_target:
+        # Only relevant when auto grid charge is on: with it off nothing will
+        # ever engage, so shedding here would just starve the appliance.
+        if auto_flag and not solar_covers_target and cheap_now and soc_below_target:
             cfg_by_id = {c.id: c for c in appliance_configs}
             import dataclasses as _dc
 
@@ -861,7 +895,7 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # "solar now covers target" would be circular — solar only covers it
         # *because* the appliance is being held off.
         hold = getattr(self, "_battery_priority_hold", None)
-        if hold and not (cheap_now and soc_below_target):
+        if hold and not (auto_flag and cheap_now and soc_below_target):
             _LOGGER.info(
                 "Releasing battery-priority hold on %s", sorted(hold),
             )
