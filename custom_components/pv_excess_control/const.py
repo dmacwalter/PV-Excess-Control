@@ -175,30 +175,6 @@ CONF_ALLOW_GRID_CHARGING = "allow_grid_charging"
 CONF_BATTERY_MAX_DISCHARGE_ENTITY = "battery_max_discharge_entity"
 CONF_BATTERY_MAX_DISCHARGE_DEFAULT = "battery_max_discharge_default"
 CONF_MIN_BATTERY_SOC = "min_battery_soc"
-# Battery target protection (0.3.12). Protection engages only once charging
-# at the assured rate would no longer reach battery_target_soc by
-# battery_target_time with the margin to spare. While engaged, appliances may
-# not draw on grid supplement and SHED ignores the deadline-aware
-# averaged-excess skip. A charge rate of 0 disables (upstream behaviour).
-# Replaces the fixed battery_protect_window_minutes option from 0.3.11.
-CONF_BATTERY_PROTECT_CHARGE_RATE = "battery_protect_charge_rate_w"
-CONF_BATTERY_PROTECT_MARGIN = "battery_protect_margin_minutes"
-DEFAULT_BATTERY_PROTECT_CHARGE_RATE = 0
-DEFAULT_BATTERY_PROTECT_MARGIN = 5
-# 0.3.13: two-stage charge model. Below the taper SoC the battery is assumed
-# to charge at the bulk rate; from the taper SoC up, at the assured rate.
-# A bulk rate of 0 means "use the assured rate throughout" (0.3.12 behaviour).
-CONF_BATTERY_PROTECT_BULK_RATE = "battery_protect_bulk_rate_w"
-CONF_BATTERY_PROTECT_TAPER_SOC = "battery_protect_taper_soc"
-DEFAULT_BATTERY_PROTECT_BULK_RATE = 0
-DEFAULT_BATTERY_PROTECT_TAPER_SOC = 90
-# The gate stands aside while the battery is not supplying the house: the site
-# is importing and the battery is charging, idle or at its floor. Appliance
-# load is then met from the grid and does not come out of the battery.
-# 0.3.13 required the battery to be charging (a forced grid charge); 0.3.14
-# widens this to any state where the battery is not discharging.
-BATTERY_PROTECT_MAX_DISCHARGE_W = 200
-BATTERY_PROTECT_GRID_IMPORT_MIN_W = 200
 
 # Inverter forced grid-charge (auto + manual)
 CONF_AUTO_BATTERY_GRID_CHARGE = "auto_battery_grid_charge"

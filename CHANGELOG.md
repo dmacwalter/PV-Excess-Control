@@ -26,7 +26,7 @@ changes are intended to be offered back upstream.
 | Battery power during grid charge | Can be double-counted as "excess" | Grid-charge false-positive fix |
 | SHED near appliance deadlines | Reacts to instantaneous excess only | Deadline-aware shed protection via per-appliance averaged excess |
 | Appliance running post-deadline | No battery-state check | Blocked unless battery met its target |
-| Last hours before battery target | Grid supplement and averaged-excess shed skip unaffected by SoC | Optional gate closes both once the battery can no longer be charged to target in time, two-stage charge model, stands aside during grid charging (0.3.13; 0.3.12 single rate; 0.3.11 fixed window) |
+| Last hours before battery target | Grid supplement and averaged-excess shed skip unaffected by SoC | Unchanged. The battery target gate of 0.3.11-0.3.14 was removed in 0.3.15 |
 
 ---
 
@@ -721,6 +721,36 @@ scenarios with the gate on, three marginal cases fell outside the invariants:
 - The simulator now supplies `price_windows` and holds a just-in-time grid
   charge once started, as the real one was held on 2026-09-26.
 - Full suite: 1043 passed.
+
+### 21. Battery target protection removed (0.3.15)
+
+The battery target protection added in 0.3.11-0.3.14 (sections 16-19) is
+gone, along with its settings. It depended on too many site-specific factors
+to be worth configuring: charge rate and taper, margin, and whether and when
+something else grid-charges the battery. On a tariff where the pre-peak rate
+is the cheapest grid energy, a grid charge that starts when needed makes it
+largely redundant. Its settings are no longer offered or read. Any values
+saved under 0.3.11-0.3.14 stay in the config entry unused.
+
+Kept: the four grid supplement and must-run fixes (section 20). None has a
+setting. Compared with v0.3.10, the integration now differs only in those
+fixes.
+
+**Tests.**
+
+- The battery-protection tests are removed.
+- The simulator is now `tests/scenario_sim.py`, and
+  `tests/test_pool_scenarios.py` checks outcomes directly: minimum runtime
+  met where the day allows, no more than 4 switchings, and no peak-time
+  running from the battery. It covers 18 named scenarios and 40 fixed-seed
+  random ones. Reverting any one fix makes these tests or
+  `tests/test_grid_supplement_hold.py` (16 tests) fail.
+- Offline, 900 more random afternoons had one marginal case: a pool on
+  solar excess until 16:23 drew just over 0.1 kWh from the battery after
+  15:50.
+- Full suite: 991 tests. Two upstream tests in `TestDeadlineReasonStrings`
+  depend on the wall clock and fail after 14:00 UTC. They fail the same way
+  on v0.3.10.
 
 ---
 

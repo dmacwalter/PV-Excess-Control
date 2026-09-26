@@ -1,10 +1,9 @@
-"""Closed-loop, minute-by-minute simulation used by
-test_battery_protect_scenarios.py.
+"""Closed-loop, minute-by-minute simulation used by test_pool_scenarios.py.
 
 Drives the real Optimizer against a model of one installation (GoodWe
-hybrid, 22.4 kWh battery, Ergon 14C tariff, pool pump/heater) so that the
-battery target protection can be judged on outcomes over a whole afternoon,
-not just single decisions.
+hybrid, 22.4 kWh battery, Ergon 14C tariff, pool pump/heater) so that grid
+supplement, must-run and shed behaviour can be judged on outcomes over a
+whole afternoon, not just single decisions.
 
 Inputs are 5-minute means from Home Assistant statistics for 2026-09-26,
 06:00-15:55 local: PV, whole-house load, and the pool's own draw (subtracted
@@ -178,19 +177,6 @@ class Scenario:
 
 
 @dataclass
-class Settings:
-    label: str
-    rate_w: float = 0
-    margin: float = 0
-    bulk_w: float = 0
-    taper: float = 90
-
-
-OFF = Settings("off")
-RECOMMENDED = Settings("6000/10 bulk 9000", 6000, 10, 9000)
-
-
-@dataclass
 class Outcome:
     soc_at_target: float = 0.0
     runtime_end: timedelta = timedelta()
@@ -198,7 +184,6 @@ class Outcome:
     after_target_minutes: int = 0
     after_target_from_battery_kwh: float = 0.0
     grid_supplement_starts: int = 0
-    gate_first: datetime | None = None
     switches: int = 0
     soc_end: float = 0.0
     log: list = field(default_factory=list)
@@ -249,16 +234,11 @@ def _charging(sc, t, soc) -> bool:
     return False
 
 
-def simulate(sc: Scenario, st: Settings) -> Outcome:
+def simulate(sc: Scenario) -> Outcome:
     rnd = random.Random(sc.seed)
     opt = Optimizer(
         grid_voltage=240, timezone_str="Australia/Brisbane", off_threshold=-100,
         controller_interval=60,
-        battery_protect_charge_rate_w=st.rate_w,
-        battery_protect_margin_minutes=st.margin,
-        battery_capacity_kwh=CAPACITY_KWH,
-        battery_protect_bulk_rate_w=st.bulk_w,
-        battery_protect_taper_soc=st.taper,
     )
     cfg = pool_config(sc)
     plan = Plan(
@@ -318,8 +298,6 @@ def simulate(sc: Scenario, st: Settings) -> Outcome:
                 power_history=history, tariff=TariffInfo(price(t), 0.06, 0.20, 0.20, WINDOWS),
                 plan_influence="light",
             )
-            if opt._battery_protection_active(cfg) and out.gate_first is None:
-                out.gate_first = t
             if result.decisions:
                 d = result.decisions[0]
                 want_on = d.action in (Action.ON, Action.SET_CURRENT)

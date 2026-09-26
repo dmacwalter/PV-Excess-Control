@@ -22,14 +22,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
-    CONF_BATTERY_PROTECT_BULK_RATE,
-    CONF_BATTERY_PROTECT_CHARGE_RATE,
-    CONF_BATTERY_PROTECT_MARGIN,
-    CONF_BATTERY_PROTECT_TAPER_SOC,
-    DEFAULT_BATTERY_PROTECT_BULK_RATE,
-    DEFAULT_BATTERY_PROTECT_CHARGE_RATE,
-    DEFAULT_BATTERY_PROTECT_MARGIN,
-    DEFAULT_BATTERY_PROTECT_TAPER_SOC,
     CONF_ALLOW_GRID_CHARGING,
     CONF_APPLIANCE_ENTITY,
     CONF_AVERAGING_WINDOW,
@@ -270,32 +262,12 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         tz_name = str(hass.config.time_zone) if hasattr(hass.config, 'time_zone') else "UTC"
         enable_preemption = config_entry.data.get(CONF_ENABLE_PREEMPTION, True)
         off_threshold = config_entry.data.get(CONF_OFF_THRESHOLD, DEFAULT_OFF_THRESHOLD)
-        protect_rate = config_entry.data.get(
-            CONF_BATTERY_PROTECT_CHARGE_RATE, DEFAULT_BATTERY_PROTECT_CHARGE_RATE
-        )
-        protect_margin = config_entry.data.get(
-            CONF_BATTERY_PROTECT_MARGIN, DEFAULT_BATTERY_PROTECT_MARGIN
-        )
         self.optimizer = Optimizer(
             grid_voltage=grid_voltage,
             timezone_str=tz_name,
             enable_preemption=enable_preemption,
             off_threshold=off_threshold,
             controller_interval=controller_interval,
-            battery_protect_charge_rate_w=float(protect_rate or 0),
-            battery_protect_margin_minutes=float(
-                DEFAULT_BATTERY_PROTECT_MARGIN if protect_margin is None else protect_margin
-            ),
-            battery_capacity_kwh=config_entry.data.get(CONF_BATTERY_CAPACITY),
-            battery_protect_bulk_rate_w=float(
-                config_entry.data.get(CONF_BATTERY_PROTECT_BULK_RATE)
-                or DEFAULT_BATTERY_PROTECT_BULK_RATE
-            ),
-            battery_protect_taper_soc=float(
-                DEFAULT_BATTERY_PROTECT_TAPER_SOC
-                if config_entry.data.get(CONF_BATTERY_PROTECT_TAPER_SOC) is None
-                else config_entry.data[CONF_BATTERY_PROTECT_TAPER_SOC]
-            ),
         )
         self.planner = Planner(grid_voltage=grid_voltage, timezone_str=tz_name)
 

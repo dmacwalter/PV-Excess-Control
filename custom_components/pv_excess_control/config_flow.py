@@ -47,10 +47,6 @@ except ImportError:
     SubentryFlowResult = dict  # type: ignore[assignment, misc]
 
 from .const import (
-    CONF_BATTERY_PROTECT_BULK_RATE,
-    CONF_BATTERY_PROTECT_CHARGE_RATE,
-    CONF_BATTERY_PROTECT_MARGIN,
-    CONF_BATTERY_PROTECT_TAPER_SOC,
     CONF_ACTUAL_POWER_ENTITY,
     CONF_ALLOW_GRID_CHARGING,
     CONF_ALLOW_GRID_SUPPLEMENT,
@@ -739,42 +735,6 @@ def _battery_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 NumberSelectorConfig(
                     min=0, max=100, step=1, unit_of_measurement="%",
                     mode=NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Optional(
-                CONF_BATTERY_PROTECT_CHARGE_RATE,
-                default=d.get(CONF_BATTERY_PROTECT_CHARGE_RATE, 0),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0, max=50000, step=100, unit_of_measurement="W",
-                    mode=NumberSelectorMode.BOX,
-                )
-            ),
-            vol.Optional(
-                CONF_BATTERY_PROTECT_MARGIN,
-                default=d.get(CONF_BATTERY_PROTECT_MARGIN, 5),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0, max=120, step=1, unit_of_measurement="min",
-                    mode=NumberSelectorMode.BOX,
-                )
-            ),
-            vol.Optional(
-                CONF_BATTERY_PROTECT_BULK_RATE,
-                default=d.get(CONF_BATTERY_PROTECT_BULK_RATE, 0),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0, max=50000, step=100, unit_of_measurement="W",
-                    mode=NumberSelectorMode.BOX,
-                )
-            ),
-            vol.Optional(
-                CONF_BATTERY_PROTECT_TAPER_SOC,
-                default=d.get(CONF_BATTERY_PROTECT_TAPER_SOC, 90),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0, max=100, step=1, unit_of_measurement="%",
-                    mode=NumberSelectorMode.BOX,
                 )
             ),
             vol.Required(
@@ -1506,11 +1466,6 @@ class PvExcessControlOptionsFlow(config_entries.OptionsFlow):
                     CONF_BATTERY_MAX_DISCHARGE_ENTITY,
                     CONF_BATTERY_MAX_DISCHARGE_DEFAULT,
                     CONF_MIN_BATTERY_SOC,
-                    CONF_BATTERY_PROTECT_CHARGE_RATE,
-                    CONF_BATTERY_PROTECT_MARGIN,
-                    CONF_BATTERY_PROTECT_BULK_RATE,
-                    CONF_BATTERY_PROTECT_TAPER_SOC,
-                    "battery_protect_window_minutes",  # retired in 0.3.12
                 ]:
                     self.data.pop(key, None)
 

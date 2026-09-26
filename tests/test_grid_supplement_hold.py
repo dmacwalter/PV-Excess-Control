@@ -18,13 +18,62 @@ from datetime import datetime, timedelta
 
 from freezegun import freeze_time
 
-from custom_components.pv_excess_control.const import Action
-from custom_components.pv_excess_control.models import TariffInfo, TariffWindow
+from custom_components.pv_excess_control.const import Action, BatteryStrategy
+from custom_components.pv_excess_control.models import (
+    ApplianceConfig,
+    ApplianceState,
+    BatteryTarget,
+    Plan,
+    PowerState,
+    TariffInfo,
+    TariffWindow,
+)
 from custom_components.pv_excess_control.optimizer import Optimizer
 
-from .test_battery_protect_target import _cfg, _plan, _ps, _state
-
 NOW = datetime(2026, 9, 26, 14, 0)  # naive local, frozen
+
+
+def _cfg(**over):
+    """The pool as configured: 1810 W nominal, 3-7 h a day, grid supplement."""
+    base = dict(
+        id="pool", name="Pool", entity_id="switch.pool", priority=10, phases=1,
+        nominal_power=1810, actual_power_entity="sensor.pool_power",
+        dynamic_current=False, current_entity=None, min_current=6, max_current=32,
+        ev_soc_entity=None, ev_connected_entity=None, is_big_consumer=False,
+        battery_max_discharge_override=None, on_only=False,
+        min_daily_runtime=timedelta(hours=3), max_daily_runtime=timedelta(hours=7),
+        schedule_deadline=None, allow_grid_supplement=True, max_grid_power=None,
+        switch_interval=timedelta(0), averaging_window=None,
+        start_after=None, end_before=None,
+    )
+    base.update(over)
+    return ApplianceConfig(**base)
+
+
+def _state(is_on=False, runtime=timedelta(hours=6)):
+    return ApplianceState(
+        appliance_id="pool", is_on=is_on, current_power=1330.0 if is_on else 0.0,
+        current_amperage=None, runtime_today=runtime, energy_today=0.0,
+        last_state_change=None, ev_connected=None, ev_soc=None, activations_today=0,
+    )
+
+
+def _ps(excess, soc=90.0):
+    """Self-consumption: a deficit is met by the battery, a surplus exported."""
+    deficit = excess < 0
+    return PowerState(
+        pv_production=4300.0, grid_export=max(excess, 0.0), grid_import=0.0,
+        load_power=4300.0 - excess, excess_power=float(excess), battery_soc=soc,
+        battery_power=float(excess) if deficit else 0.0, ev_soc=None, timestamp=NOW,
+    )
+
+
+def _plan(target_in=timedelta(hours=6)):
+    return Plan(
+        created_at=NOW, horizon=timedelta(hours=12), entries=[], confidence=0.0,
+        grid_charge_recommended=False,
+        battery_target=BatteryTarget(100.0, NOW + target_in, BatteryStrategy.BALANCED),
+    )
 
 
 def _tariff(price=0.18, cheap_until=None):
@@ -37,12 +86,12 @@ def _tariff(price=0.18, cheap_until=None):
     return TariffInfo(price, 0.06, 0.20, 0.20, windows)
 
 
-def _decide(cfg, state, history, tariff=None, **opt_kw):
-    opt = Optimizer(grid_voltage=240, controller_interval=60, off_threshold=-100, **opt_kw)
+def _decide(cfg, state, history, tariff=None):
+    opt = Optimizer(grid_voltage=240, controller_interval=60, off_threshold=-100)
     with freeze_time(NOW):
         return opt.optimize(
             power_state=history[-1], appliances=[cfg], appliance_states=[state],
-            plan=_plan(target_in=timedelta(hours=6)), power_history=history,
+            plan=_plan(), power_history=history,
             tariff=tariff or _tariff(), plan_influence="none",
         ).decisions[0]
 
@@ -73,18 +122,6 @@ class TestGridSupplementHold:
         d = _decide(_cfg(nominal_power=1810), st, [_ps(-1950)] * 10)
         assert d.action == Action.ON
         assert "grid supplement" in d.reason.lower()
-
-    def test_not_held_when_battery_protection_engaged(self):
-        opt_kw = dict(battery_protect_charge_rate_w=6000, battery_protect_margin_minutes=10,
-                      battery_capacity_kwh=22.4)
-        opt = Optimizer(grid_voltage=240, controller_interval=60, off_threshold=-100, **opt_kw)
-        with freeze_time(NOW):
-            d = opt.optimize(
-                power_state=RUNNING_DEFICIT[-1], appliances=[_cfg()],
-                appliance_states=[_state(is_on=True)], plan=_plan(target_in=timedelta(minutes=20)),
-                power_history=RUNNING_DEFICIT, tariff=_tariff(), plan_influence="none",
-            ).decisions[0]
-        assert d.action == Action.OFF, d.reason
 
     def test_normal_staying_on_text_when_no_deficit(self):
         d = _decide(_cfg(), _state(is_on=True), [_ps(300)] * 10)
