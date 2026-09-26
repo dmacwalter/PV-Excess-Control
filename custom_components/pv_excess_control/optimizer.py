@@ -15,7 +15,8 @@ from datetime import time, timedelta
 from zoneinfo import ZoneInfo
 
 from custom_components.pv_excess_control.const import (
-    DEFAULT_BATTERY_PROTECT_WINDOW,
+    DEFAULT_BATTERY_PROTECT_CHARGE_RATE,
+    DEFAULT_BATTERY_PROTECT_MARGIN,
     DEFAULT_CONTROLLER_INTERVAL,
     DEFAULT_DYNAMIC_ON_THRESHOLD,
     DEFAULT_GRID_VOLTAGE,
@@ -59,7 +60,9 @@ class Optimizer:
         off_threshold: int = DEFAULT_OFF_THRESHOLD,
         min_good_samples: int = 3,
         controller_interval: int = DEFAULT_CONTROLLER_INTERVAL,
-        battery_protect_window_minutes: int = DEFAULT_BATTERY_PROTECT_WINDOW,
+        battery_protect_charge_rate_w: float = DEFAULT_BATTERY_PROTECT_CHARGE_RATE,
+        battery_protect_margin_minutes: float = DEFAULT_BATTERY_PROTECT_MARGIN,
+        battery_capacity_kwh: float | None = None,
     ) -> None:
         self.grid_voltage = grid_voltage
         self._tz = ZoneInfo(timezone_str) if timezone_str else None
@@ -71,11 +74,13 @@ class Optimizer:
         # previously hardcoded to 30 inside optimize() regardless of the
         # coordinator's actual configured interval -- see CHANGELOG 0.3.4/0.3.5.
         self._controller_interval = max(1, controller_interval)
-        # Pre-target battery protection window. Zero disables it, which keeps
-        # behaviour identical to upstream. See _battery_protection_active().
-        self._battery_protect_window = timedelta(
-            minutes=max(0, int(battery_protect_window_minutes or 0))
+        # Battery target protection. A zero charge rate disables it, which
+        # keeps behaviour identical to upstream. See _battery_protection_active().
+        self._battery_protect_rate_kw = max(0.0, float(battery_protect_charge_rate_w or 0)) / 1000.0
+        self._battery_protect_margin = timedelta(
+            minutes=max(0.0, float(battery_protect_margin_minutes or 0))
         )
+        self._battery_capacity_kwh = float(battery_capacity_kwh) if battery_capacity_kwh else None
         # Initialised here for safety; optimize() overwrites both on every cycle.
         self._plan_influence: str = "none"
         self._grid_supplement_count: int = 0
@@ -456,37 +461,46 @@ class Optimizer:
         return self._current_battery_soc >= (battery_target.target_soc - margin)
 
     def _battery_protection_active(self, appliance: ApplianceConfig) -> bool:
-        """Return True while the battery must be protected ahead of its target.
+        """Return True once the battery target is at risk.
 
-        Active when all of these hold:
-          - battery_protect_window is configured (> 0),
+        Engaged when all of these hold:
+          - an assured charge rate is configured (> 0) and battery capacity
+            is known,
           - the plan has a battery target and a current SoC reading exists,
-          - SoC is still below target_soc,
-          - now is inside [target_time - window, target_time).
+          - SoC is below target_soc and now is before target_time,
+          - the time left is no longer enough to charge the shortfall at the
+            assured rate plus the margin:
 
-        While active, two things change for ``appliance``:
+                shortfall_kwh / rate_kw + margin >= time_left
+
+        While engaged, for ``appliance``:
           1. no grid-supplement path may start it or raise its current, and
-          2. SHED ignores the deadline-aware averaged-excess skip, so it
-             reacts to the instantaneous balance like any other load.
+          2. SHED ignores the deadline-aware averaged-excess skip.
 
-        Background: excess is measured as PV - load, so power the battery is
-        absorbing counts as available. With a cheap-looking daytime tariff the
-        grid-supplement paths will start an appliance with little or no real
-        surplus, and once running the deadline-aware skip can keep it on
-        while the battery discharges. Observed 2026-09-26: pool started at
-        15:21 on grid supplement (0.18 <= 0.20) with SoC 90% and a 16:00
-        target, then held on through three "shed imminent" cycles at
-        -681/-1228/-1064 W while the battery discharged up to ~1.5 kW.
-        The post-deadline gate only engages at target_time itself, too late.
+        Why feasibility rather than a fixed window: on a tariff where the
+        pre-peak day rate is the cheapest grid energy available (Ergon 14C,
+        0.18 vs 0.25 overnight and 0.45 peak), running an appliance from the
+        grid before the peak is the right call, even when that energy is
+        routed through the battery, provided the battery can still be
+        refilled before the target time. A fixed window blocked exactly that.
+        The shortfall only matters once there is no longer time to recover it.
 
-        ``battery_target_gated`` appliances are exempt: they are the battery
-        charging path (e.g. an inverter fast-charge switch), and are exactly
-        what should be allowed to run when the battery is behind.
+        Observed 2026-09-26, target 100% by 16:00, 22.4 kWh battery: the pool
+        started on grid supplement at 15:21 with SoC 90%, then was held on
+        through three "shed imminent" cycles while the battery discharged.
+        A grid charge from 15:31 still reached 99% by 15:49 (about 7 kW
+        average across 90-99%). With a 7000 W assured rate and a 5 min
+        margin, the gate stays open at 15:21 (19 + 5 min needed, 39 left)
+        and closes only when the recovery time genuinely runs out.
 
-        Returns False on missing data -- only blocks when it can positively
-        confirm the battery is short of target inside the window.
+        The assured rate should be what the system can actually deliver
+        near the top of charge (CC-CV taper included), from grid if grid
+        charging is available, otherwise from typical late-afternoon PV.
+
+        ``battery_target_gated`` appliances are exempt: they are the charging
+        path. Missing data never engages the gate.
         """
-        if self._battery_protect_window <= timedelta(0):
+        if self._battery_protect_rate_kw <= 0 or not self._battery_capacity_kwh:
             return False
         if appliance.battery_target_gated:
             return False
@@ -495,7 +509,8 @@ class Optimizer:
         battery_target = self._current_plan.battery_target
         if battery_target is None or battery_target.target_soc is None:
             return False
-        if self._current_battery_soc >= battery_target.target_soc:
+        shortfall_pct = battery_target.target_soc - self._current_battery_soc
+        if shortfall_pct <= 0:
             return False
 
         from datetime import datetime
@@ -505,7 +520,22 @@ class Optimizer:
             if target_time.tzinfo is not None
             else datetime.now()
         )
-        return (target_time - self._battery_protect_window) <= now < target_time
+        time_left = target_time - now
+        if time_left <= timedelta(0):
+            return False
+
+        shortfall_kwh = shortfall_pct / 100.0 * self._battery_capacity_kwh
+        needed = timedelta(hours=shortfall_kwh / self._battery_protect_rate_kw)
+        engaged = needed + self._battery_protect_margin >= time_left
+        if engaged:
+            _LOGGER.debug(
+                "Battery protection engaged for %s: %.2f kWh short, "
+                "%s needed at %.1f kW + %s margin, %s left",
+                appliance.name, shortfall_kwh, needed,
+                self._battery_protect_rate_kw, self._battery_protect_margin,
+                time_left,
+            )
+        return engaged
 
     def _apply_safety_rules(
         self,

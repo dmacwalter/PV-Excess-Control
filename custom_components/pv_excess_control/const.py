@@ -175,12 +175,16 @@ CONF_ALLOW_GRID_CHARGING = "allow_grid_charging"
 CONF_BATTERY_MAX_DISCHARGE_ENTITY = "battery_max_discharge_entity"
 CONF_BATTERY_MAX_DISCHARGE_DEFAULT = "battery_max_discharge_default"
 CONF_MIN_BATTERY_SOC = "min_battery_soc"
-# Minutes before battery_target_time during which, if SoC is still below
-# battery_target_soc, appliances may not draw on grid supplement and SHED
-# ignores the deadline-aware averaged-excess skip. 0 disables (upstream
-# behaviour).
-CONF_BATTERY_PROTECT_WINDOW = "battery_protect_window_minutes"
-DEFAULT_BATTERY_PROTECT_WINDOW = 0
+# Battery target protection (0.3.12). Protection engages only once charging
+# at the assured rate would no longer reach battery_target_soc by
+# battery_target_time with the margin to spare. While engaged, appliances may
+# not draw on grid supplement and SHED ignores the deadline-aware
+# averaged-excess skip. A charge rate of 0 disables (upstream behaviour).
+# Replaces the fixed battery_protect_window_minutes option from 0.3.11.
+CONF_BATTERY_PROTECT_CHARGE_RATE = "battery_protect_charge_rate_w"
+CONF_BATTERY_PROTECT_MARGIN = "battery_protect_margin_minutes"
+DEFAULT_BATTERY_PROTECT_CHARGE_RATE = 0
+DEFAULT_BATTERY_PROTECT_MARGIN = 5
 
 # Inverter forced grid-charge (auto + manual)
 CONF_AUTO_BATTERY_GRID_CHARGE = "auto_battery_grid_charge"

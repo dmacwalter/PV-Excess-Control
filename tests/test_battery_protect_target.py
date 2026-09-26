@@ -1,4 +1,4 @@
-"""Tests for the pre-target battery protection window.
+"""Tests for battery target protection (feasibility gate).
 
 Reproduces 2026-09-26. Battery target 100% by 16:00. At 15:21 with SoC 90%
 the pool (1810 W nominal) was started on grid supplement because the 14C
@@ -9,9 +9,15 @@ its schedule deadline had not passed, so SHED used the pool's averaged
 excess instead, and that stayed above the off threshold. The battery
 discharged at up to ~1.5 kW while this happened.
 
-With battery_protect_window_minutes > 0, and SoC below target inside the
-window, neither of those paths is available. With the window at 0 the
-behaviour must be exactly as before.
+0.3.11 answered this with a fixed window before the target time. That was
+wrong for 14C: 0.18 is the cheapest grid energy of the day, so running the
+pool before the peak is correct even when the energy is routed through the
+battery, provided the battery can still be refilled in time. On the day a
+grid charge from 15:31 reached 99% by 15:49 (about 7 kW across 90-99%).
+
+0.3.12 engages protection only once the shortfall can no longer be charged
+at the assured rate, plus a margin, before the target time. With the rate at
+0 the behaviour must be exactly as upstream.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -26,7 +32,12 @@ from custom_components.pv_excess_control.models import (
 )
 from custom_components.pv_excess_control.optimizer import Optimizer
 
-WINDOW_MIN = 120
+CAPACITY_KWH = 22.4
+RATE_W = 7000
+MARGIN_MIN = 5
+# 10% of 22.4 kWh at 7 kW is 19.2 min, plus 5 min margin = 24.2 min.
+RECOVERABLE = timedelta(minutes=39)   # 15:21 against a 16:00 target
+TOO_LATE = timedelta(minutes=20)
 
 
 def _cfg(**over):
@@ -63,7 +74,7 @@ def _ps(excess, soc=90.0):
     )
 
 
-def _plan(target_in=timedelta(minutes=39), target_soc=100.0, aware=False):
+def _plan(target_in=TOO_LATE, target_soc=100.0, aware=False):
     now = datetime.now(timezone.utc).astimezone() if aware else datetime.now()
     return Plan(
         created_at=now, horizon=timedelta(hours=12), entries=[],
@@ -79,11 +90,17 @@ def _plan(target_in=timedelta(minutes=39), target_soc=100.0, aware=False):
 TARIFF = TariffInfo(0.18, 0.06, 0.20, 0.20)
 
 
-def _run(cfg, state, history, *, window=WINDOW_MIN, plan=None):
-    opt = Optimizer(
+def _opt(rate=RATE_W, capacity=CAPACITY_KWH):
+    return Optimizer(
         grid_voltage=240, controller_interval=60,
-        battery_protect_window_minutes=window,
+        battery_protect_charge_rate_w=rate,
+        battery_protect_margin_minutes=MARGIN_MIN,
+        battery_capacity_kwh=capacity,
     )
+
+
+def _run(cfg, state, history, *, rate=RATE_W, capacity=CAPACITY_KWH, plan=None):
+    opt = _opt(rate, capacity)
     return opt.optimize(
         power_state=history[-1], appliances=[cfg], appliance_states=[state],
         plan=plan or _plan(), power_history=history, tariff=TARIFF,
@@ -94,12 +111,19 @@ def _run(cfg, state, history, *, window=WINDOW_MIN, plan=None):
 class TestGridSupplementStart:
     """The 15:21 start."""
 
-    def test_window_disabled_keeps_upstream_behaviour(self):
-        d = _run(_cfg(), _state(), [_ps(1049)] * 10, window=0)
+    def test_disabled_keeps_upstream_behaviour(self):
+        d = _run(_cfg(), _state(), [_ps(1049)] * 10, rate=0)
         assert d.action == Action.ON
         assert "grid supplement" in d.reason.lower()
 
-    def test_blocked_inside_window_when_below_target(self):
+    def test_allowed_while_battery_can_still_recover(self):
+        """The 15:21 case: 18c pre-peak, 24 min needed, 39 min left."""
+        d = _run(_cfg(), _state(), [_ps(1049)] * 10,
+                 plan=_plan(target_in=RECOVERABLE))
+        assert d.action == Action.ON
+        assert "grid supplement" in d.reason.lower()
+
+    def test_blocked_once_recovery_time_runs_out(self):
         d = _run(_cfg(), _state(), [_ps(1049)] * 10)
         assert d.action != Action.ON, d.reason
 
@@ -108,14 +132,19 @@ class TestGridSupplementStart:
         assert d.action == Action.ON
         assert "grid supplement" in d.reason.lower()
 
-    def test_allowed_before_window_opens(self):
-        d = _run(_cfg(), _state(), [_ps(1049)] * 10,
-                 plan=_plan(target_in=timedelta(hours=4)))
+    def test_bigger_shortfall_engages_earlier(self):
+        """50% short is 80 min at 7 kW, so 39 min out is already too late."""
+        d = _run(_cfg(), _state(), [_ps(1049, soc=50.0)] * 10,
+                 plan=_plan(target_in=RECOVERABLE))
+        assert d.action != Action.ON, d.reason
+
+    def test_missing_capacity_does_not_block(self):
+        d = _run(_cfg(), _state(), [_ps(1049)] * 10, capacity=None)
         assert d.action == Action.ON
 
     def test_not_active_after_target_time(self):
-        """The window is [target - w, target); after that the post-deadline
-        gate and ordinary tariff logic own the decision."""
+        """After the target time the post-deadline gate and ordinary tariff
+        logic own the decision."""
         d = _run(_cfg(), _state(), [_ps(1049)] * 10,
                  plan=_plan(target_in=-timedelta(minutes=5)))
         assert d.action == Action.ON
@@ -154,14 +183,19 @@ class TestShedWhileRunning:
         # above the off threshold while the instantaneous one is negative.
         return [_ps(500)] * 9 + [_ps(-681)]
 
-    def test_window_disabled_reproduces_the_hold(self):
-        d = _run(self._deadline_cfg(), _state(is_on=True), self._history(), window=0)
+    def test_disabled_reproduces_the_hold(self):
+        d = _run(self._deadline_cfg(), _state(is_on=True), self._history(), rate=0)
         assert d.action == Action.ON
         assert "shed imminent" in d.reason
 
-    def test_sheds_on_instantaneous_inside_window(self):
+    def test_sheds_on_instantaneous_when_engaged(self):
         d = _run(self._deadline_cfg(), _state(is_on=True), self._history())
         assert d.action == Action.OFF, d.reason
+
+    def test_hold_kept_while_battery_can_still_recover(self):
+        d = _run(self._deadline_cfg(), _state(is_on=True), self._history(),
+                 plan=_plan(target_in=RECOVERABLE))
+        assert d.action == Action.ON
 
     def test_no_early_shed_once_target_reached(self):
         hist = [_ps(500, soc=100.0)] * 9 + [_ps(-681, soc=100.0)]
@@ -170,15 +204,15 @@ class TestShedWhileRunning:
 
 
 class TestCheapWindowOverride:
-    def test_override_amps_suppressed_inside_window(self):
-        opt = Optimizer(grid_voltage=240, battery_protect_window_minutes=WINDOW_MIN)
+    def test_override_amps_suppressed_when_engaged(self):
+        opt = _opt()
         opt._current_plan = _plan()
         opt._current_battery_soc = 90.0
         cfg = _cfg(dynamic_current=True, cheap_grid_target_current=16.0)
         assert opt._cheap_window_target_amps(cfg, TARIFF, 1) is None
 
     def test_override_amps_unchanged_when_disabled(self):
-        opt = Optimizer(grid_voltage=240, battery_protect_window_minutes=0)
+        opt = _opt(rate=0)
         opt._current_plan = _plan()
         opt._current_battery_soc = 90.0
         cfg = _cfg(dynamic_current=True, cheap_grid_target_current=16.0)

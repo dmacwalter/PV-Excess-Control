@@ -26,7 +26,7 @@ changes are intended to be offered back upstream.
 | Battery power during grid charge | Can be double-counted as "excess" | Grid-charge false-positive fix |
 | SHED near appliance deadlines | Reacts to instantaneous excess only | Deadline-aware shed protection via per-appliance averaged excess |
 | Appliance running post-deadline | No battery-state check | Blocked unless battery met its target |
-| Last hours before battery target | Grid supplement and averaged-excess shed skip unaffected by SoC | Optional window closes both while SoC is below target (0.3.11) |
+| Last hours before battery target | Grid supplement and averaged-excess shed skip unaffected by SoC | Optional gate closes both once the battery can no longer be charged to target in time (0.3.12; fixed window in 0.3.11) |
 
 ---
 
@@ -522,6 +522,45 @@ observed. With it set, both are closed. Also covered: target already reached,
 window not yet open, after target time, charge-path exemption, missing SoC,
 timezone-aware targets, real surplus still starting the appliance, and the
 cheap-window current override. Full suite: 929 passed.
+
+### 17. Battery target protection is now a feasibility check (0.3.12)
+
+**Problem with 0.3.11.** The fixed window blocked grid supplement for its whole
+length whenever SoC was below target. On Ergon 14C that is the wrong answer:
+the 0.18 day rate is the cheapest grid energy of the day (0.25 overnight, 0.45
+peak), so running the pool from the grid before the peak is correct, even when
+the energy is routed through the battery, provided the battery can still be
+refilled before the target. On 2026-09-26 it could: a grid charge from 15:31
+took SoC from 90% to 99% by 15:49, about 7 kW averaged across the top of
+charge.
+
+**Fix.** `battery_protect_window_minutes` is retired. Two options replace it on
+the Battery step:
+
+- `battery_protect_charge_rate_w`: the charge rate you can rely on near the top
+  of charge (CC-CV taper included), from grid if grid charging is available.
+  0 disables, which is the default.
+- `battery_protect_margin_minutes`: reserve time on top of the calculated
+  charge time. Default 5.
+
+Protection engages only when
+
+    (target_soc - soc) / 100 * battery_capacity / rate + margin >= time left
+
+and SoC is below target before `battery_target_time`. What it does once engaged
+is unchanged from 0.3.11: grid-supplement paths are closed, and SHED drops the
+deadline-aware averaged-excess skip. The same exemptions apply
+(`battery_target_gated`, deadline must-run), and missing data, including an
+unset `battery_capacity`, never engages it.
+
+With 22.4 kWh, 7000 W and 5 min, today's 15:21 start (10% short, 39 min left)
+is allowed: 19 + 5 min needed. The gate would close at about 24 minutes out
+for a 10% shortfall, or earlier for a larger one.
+
+**Tests.** `tests/test_battery_protect_target.py` replaces
+`test_battery_protect_window.py`, 17 cases. Adds: allowed while recovery time
+remains, blocked once it runs out, larger shortfalls engage earlier, the shed
+hold kept while recoverable, and a missing capacity. Full suite: 932 passed.
 
 ---
 
