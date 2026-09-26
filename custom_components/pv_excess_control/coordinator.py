@@ -22,6 +22,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    CONF_BATTERY_PROTECT_WINDOW,
+    DEFAULT_BATTERY_PROTECT_WINDOW,
     CONF_ALLOW_GRID_CHARGING,
     CONF_APPLIANCE_ENTITY,
     CONF_AVERAGING_WINDOW,
@@ -262,12 +264,16 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         tz_name = str(hass.config.time_zone) if hasattr(hass.config, 'time_zone') else "UTC"
         enable_preemption = config_entry.data.get(CONF_ENABLE_PREEMPTION, True)
         off_threshold = config_entry.data.get(CONF_OFF_THRESHOLD, DEFAULT_OFF_THRESHOLD)
+        battery_protect_window = config_entry.data.get(
+            CONF_BATTERY_PROTECT_WINDOW, DEFAULT_BATTERY_PROTECT_WINDOW
+        )
         self.optimizer = Optimizer(
             grid_voltage=grid_voltage,
             timezone_str=tz_name,
             enable_preemption=enable_preemption,
             off_threshold=off_threshold,
             controller_interval=controller_interval,
+            battery_protect_window_minutes=int(battery_protect_window or 0),
         )
         self.planner = Planner(grid_voltage=grid_voltage, timezone_str=tz_name)
 

@@ -47,6 +47,7 @@ except ImportError:
     SubentryFlowResult = dict  # type: ignore[assignment, misc]
 
 from .const import (
+    CONF_BATTERY_PROTECT_WINDOW,
     CONF_ACTUAL_POWER_ENTITY,
     CONF_ALLOW_GRID_CHARGING,
     CONF_ALLOW_GRID_SUPPLEMENT,
@@ -735,6 +736,15 @@ def _battery_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 NumberSelectorConfig(
                     min=0, max=100, step=1, unit_of_measurement="%",
                     mode=NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Optional(
+                CONF_BATTERY_PROTECT_WINDOW,
+                default=d.get(CONF_BATTERY_PROTECT_WINDOW, 0),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0, max=720, step=5, unit_of_measurement="min",
+                    mode=NumberSelectorMode.BOX,
                 )
             ),
             vol.Required(
@@ -1466,6 +1476,7 @@ class PvExcessControlOptionsFlow(config_entries.OptionsFlow):
                     CONF_BATTERY_MAX_DISCHARGE_ENTITY,
                     CONF_BATTERY_MAX_DISCHARGE_DEFAULT,
                     CONF_MIN_BATTERY_SOC,
+                    CONF_BATTERY_PROTECT_WINDOW,
                 ]:
                     self.data.pop(key, None)
 

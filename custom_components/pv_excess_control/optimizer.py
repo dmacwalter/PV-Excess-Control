@@ -15,6 +15,7 @@ from datetime import time, timedelta
 from zoneinfo import ZoneInfo
 
 from custom_components.pv_excess_control.const import (
+    DEFAULT_BATTERY_PROTECT_WINDOW,
     DEFAULT_CONTROLLER_INTERVAL,
     DEFAULT_DYNAMIC_ON_THRESHOLD,
     DEFAULT_GRID_VOLTAGE,
@@ -58,6 +59,7 @@ class Optimizer:
         off_threshold: int = DEFAULT_OFF_THRESHOLD,
         min_good_samples: int = 3,
         controller_interval: int = DEFAULT_CONTROLLER_INTERVAL,
+        battery_protect_window_minutes: int = DEFAULT_BATTERY_PROTECT_WINDOW,
     ) -> None:
         self.grid_voltage = grid_voltage
         self._tz = ZoneInfo(timezone_str) if timezone_str else None
@@ -69,6 +71,11 @@ class Optimizer:
         # previously hardcoded to 30 inside optimize() regardless of the
         # coordinator's actual configured interval -- see CHANGELOG 0.3.4/0.3.5.
         self._controller_interval = max(1, controller_interval)
+        # Pre-target battery protection window. Zero disables it, which keeps
+        # behaviour identical to upstream. See _battery_protection_active().
+        self._battery_protect_window = timedelta(
+            minutes=max(0, int(battery_protect_window_minutes or 0))
+        )
         # Initialised here for safety; optimize() overwrites both on every cycle.
         self._plan_influence: str = "none"
         self._grid_supplement_count: int = 0
@@ -447,6 +454,58 @@ class Optimizer:
         if self._current_battery_soc is None:
             return False
         return self._current_battery_soc >= (battery_target.target_soc - margin)
+
+    def _battery_protection_active(self, appliance: ApplianceConfig) -> bool:
+        """Return True while the battery must be protected ahead of its target.
+
+        Active when all of these hold:
+          - battery_protect_window is configured (> 0),
+          - the plan has a battery target and a current SoC reading exists,
+          - SoC is still below target_soc,
+          - now is inside [target_time - window, target_time).
+
+        While active, two things change for ``appliance``:
+          1. no grid-supplement path may start it or raise its current, and
+          2. SHED ignores the deadline-aware averaged-excess skip, so it
+             reacts to the instantaneous balance like any other load.
+
+        Background: excess is measured as PV - load, so power the battery is
+        absorbing counts as available. With a cheap-looking daytime tariff the
+        grid-supplement paths will start an appliance with little or no real
+        surplus, and once running the deadline-aware skip can keep it on
+        while the battery discharges. Observed 2026-09-26: pool started at
+        15:21 on grid supplement (0.18 <= 0.20) with SoC 90% and a 16:00
+        target, then held on through three "shed imminent" cycles at
+        -681/-1228/-1064 W while the battery discharged up to ~1.5 kW.
+        The post-deadline gate only engages at target_time itself, too late.
+
+        ``battery_target_gated`` appliances are exempt: they are the battery
+        charging path (e.g. an inverter fast-charge switch), and are exactly
+        what should be allowed to run when the battery is behind.
+
+        Returns False on missing data -- only blocks when it can positively
+        confirm the battery is short of target inside the window.
+        """
+        if self._battery_protect_window <= timedelta(0):
+            return False
+        if appliance.battery_target_gated:
+            return False
+        if self._current_plan is None or self._current_battery_soc is None:
+            return False
+        battery_target = self._current_plan.battery_target
+        if battery_target is None or battery_target.target_soc is None:
+            return False
+        if self._current_battery_soc >= battery_target.target_soc:
+            return False
+
+        from datetime import datetime
+        target_time = battery_target.target_time
+        now = (
+            datetime.now(target_time.tzinfo)
+            if target_time.tzinfo is not None
+            else datetime.now()
+        )
+        return (target_time - self._battery_protect_window) <= now < target_time
 
     def _apply_safety_rules(
         self,
@@ -985,6 +1044,7 @@ class Optimizer:
             and tariff.current_price < tariff.feed_in_tariff
             and self._grid_supplement_count < 3
             and not (appliance.battery_target_gated and self._battery_target_reached())
+            and not self._battery_protection_active(appliance)
         ):
             self._grid_supplement_count += 1
             if appliance.dynamic_current and appliance.current_entity:
@@ -1113,6 +1173,7 @@ class Optimizer:
             appliance.allow_grid_supplement
             and self._is_cheap_for_appliance(tariff, appliance)
             and not (appliance.battery_target_gated and self._battery_target_reached())
+            and not self._battery_protection_active(appliance)
         ):
             max_grid = appliance.max_grid_power if appliance.max_grid_power is not None else appliance.nominal_power
             solar_portion = max(avg_budget, 0.0)
@@ -1239,6 +1300,7 @@ class Optimizer:
                 appliance.allow_grid_supplement
                 and self._is_cheap_for_appliance(tariff, appliance)
                 and not (appliance.battery_target_gated and self._battery_target_reached())
+                and not self._battery_protection_active(appliance)
             ):
                 override_amps = self._cheap_window_target_amps(appliance, tariff, phases)
                 target_amps = override_amps if override_amps is not None else appliance.min_current
@@ -1408,6 +1470,8 @@ class Optimizer:
         if not appliance.allow_grid_supplement:
             return None
         if not self._is_cheap_for_appliance(tariff, appliance):
+            return None
+        if self._battery_protection_active(appliance):
             return None
 
         cap_amps = appliance.max_current
@@ -1773,6 +1837,8 @@ class Optimizer:
         - Never shed grid-supplemented appliances
         - Never shed bypasses_cooldown decisions (deadline must-run)
         - Never shed a dependency while any of its dependents are running
+        - Deadline-aware averaged-excess skip is suspended while
+          battery protection is active (see _battery_protection_active)
         - Reduce dynamic current before turning off
         - Prefer shedding appliances that have met their min_daily_runtime
         - Stop once instant_budget >= OFF_THRESHOLD (-50W)
@@ -1901,7 +1967,8 @@ class Optimizer:
             # the normal instant-based shed below.
             if (not force_shed
                     and appliance.schedule_deadline is not None
-                    and appliance.id in self._appliance_avg_excess):
+                    and appliance.id in self._appliance_avg_excess
+                    and not self._battery_protection_active(appliance)):
                 if not self._deadline_passed(appliance.schedule_deadline):
                     app_avg = self._appliance_avg_excess[appliance.id]
                     if app_avg >= self._off_threshold:

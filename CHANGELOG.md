@@ -26,6 +26,7 @@ changes are intended to be offered back upstream.
 | Battery power during grid charge | Can be double-counted as "excess" | Grid-charge false-positive fix |
 | SHED near appliance deadlines | Reacts to instantaneous excess only | Deadline-aware shed protection via per-appliance averaged excess |
 | Appliance running post-deadline | No battery-state check | Blocked unless battery met its target |
+| Last hours before battery target | Grid supplement and averaged-excess shed skip unaffected by SoC | Optional window closes both while SoC is below target (0.3.11) |
 
 ---
 
@@ -476,6 +477,51 @@ because they can now be interrupted mid-block for the first time. This is the
 intended trade — runtime is deferred, not lost — but it is the most
 behaviourally visible change in this release. Watch toggle counts on marginal
 days; equipment with compressors (pool heat pumps) is the main concern.
+
+### 16. Pre-target battery protection window (0.3.11)
+
+**Problem.** Excess is measured as PV minus load, so whatever the battery is
+absorbing counts as available to appliances. Two paths could then run an
+appliance off the battery shortly before `battery_target_time`:
+
+- The grid-supplement paths only check tariff and power budget. A daytime rate
+  under `cheap_price_threshold` makes an appliance startable with little or no
+  real surplus.
+- Once running, the deadline-aware shed skip (item 6) uses the appliance's
+  averaged excess while its `schedule_deadline` is still ahead. A dip that
+  keeps bouncing positive never pulls the average below the off threshold.
+
+The post-deadline battery lock (item 7) only engages at the target time itself,
+which is too late to help.
+
+Observed 2026-09-26, target 100% by 16:00: at 15:21, with SoC 90%, the pool
+started on `Grid supplement: 298W from grid (tariff 0.180 <= threshold 0.200)`
+with 1049 W of averaged excess against 2010 W needed. It then logged
+"shed imminent" at -681, -1228 and -1064 W without shedding, while the battery
+discharged at up to about 1.5 kW. It was switched off by hand at 15:31.
+
+**Fix.** A new global option, `battery_protect_window_minutes` (Battery step,
+default 0 = off). While SoC is below `battery_target_soc` and the time is within
+`[battery_target_time - window, battery_target_time)`:
+
+- the opportunity-cost, standard and dynamic grid-supplement paths are closed,
+  and `_cheap_window_target_amps()` returns `None`, so no grid top-up can start
+  an appliance or raise its current;
+- SHED skips the deadline-aware averaged-excess exemption and acts on the
+  instantaneous balance.
+
+Appliances with genuine surplus above their normal on-threshold still start.
+Deadline must-run (`bypasses_cooldown`) is untouched. `battery_target_gated`
+appliances are exempt, because they are the battery charging path. As with the
+other gates, missing data never blocks: with no plan, no target or no SoC
+reading, the window is treated as inactive.
+
+**Tests.** `tests/test_battery_protect_window.py`, 14 cases. With the window at
+0, the suite reproduces both the 15:21 start and the held-on shed exactly as
+observed. With it set, both are closed. Also covered: target already reached,
+window not yet open, after target time, charge-path exemption, missing SoC,
+timezone-aware targets, real surplus still starting the appliance, and the
+cheap-window current override. Full suite: 929 passed.
 
 ---
 
