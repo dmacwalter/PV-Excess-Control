@@ -192,10 +192,12 @@ CONF_BATTERY_PROTECT_BULK_RATE = "battery_protect_bulk_rate_w"
 CONF_BATTERY_PROTECT_TAPER_SOC = "battery_protect_taper_soc"
 DEFAULT_BATTERY_PROTECT_BULK_RATE = 0
 DEFAULT_BATTERY_PROTECT_TAPER_SOC = 90
-# 0.3.13: the gate stands aside while the battery is already being charged
-# from the grid (charging and importing at once). Grid-fed appliance load
-# then does not slow the battery.
-BATTERY_PROTECT_GRID_CHARGE_MIN_W = 500
+# The gate stands aside while the battery is not supplying the house: the site
+# is importing and the battery is charging, idle or at its floor. Appliance
+# load is then met from the grid and does not come out of the battery.
+# 0.3.13 required the battery to be charging (a forced grid charge); 0.3.14
+# widens this to any state where the battery is not discharging.
+BATTERY_PROTECT_MAX_DISCHARGE_W = 200
 BATTERY_PROTECT_GRID_IMPORT_MIN_W = 200
 
 # Inverter forced grid-charge (auto + manual)

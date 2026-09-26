@@ -615,6 +615,64 @@ a few minutes.
 Also corrected: sections 16 and 17 described 2026-09-26 against a 16:00
 target. The target on the day was 15:50. The conclusions are unchanged.
 
+### 19. Battery target protection: minimum runtime first, wider grid exemption (0.3.14)
+
+**Found by randomised testing.** The 0.3.13 scenario simulator was driven with
+randomly drawn afternoons, varying:
+
+- PV level, cloud noise and PV collapse,
+- start SoC and runtime already done,
+- six grid-charge policies,
+- random extra loads and SoC dropouts,
+- three pool deadline settings,
+- two recorded days (2026-09-23 and 2026-09-26).
+
+Each afternoon was compared with protection off. At first, some peak-time
+battery use looked like a regression, but it was only shifted: end-of-day SoC
+was the same. Judged on that, 0.3.13 still had one real failure mode, in 4 of
+300 scenarios. If the gate blocked an appliance that had not yet met its
+minimum daily runtime, it could finish 15-30 min short. Must-run starts late,
+and SHED's slack check can stop it again before the window closes.
+
+**Fix.**
+
+- The gate does not apply to an appliance until it has met its minimum daily
+  runtime.
+- The grid exemption now covers any state where the battery is not supplying
+  the house: the site importing at 200 W or more while the battery charges,
+  idles or sits at its floor (discharge under 200 W). 0.3.13 required
+  charging, so a battery held in standby or at its floor still blocked
+  appliances whose load was coming from the grid anyway.
+
+**Results** (recommended settings, 1300 random scenarios across five seeds):
+no violations. Mean SoC at target is +0.56 to +0.77 points against off, and
+mean runtime change is -8 to -10 min, all above the minimum.
+
+**Tests.**
+
+- `tests/test_battery_protect_properties.py`: 40 fixed-seed random
+  scenarios checked against the four invariants. Run against the 0.3.13
+  logic, 4 of the 40 fail.
+- `tests/test_battery_protect_config.py`: 10 tests covering the options
+  flow schema, defaults, saved values and range checks. They also build the
+  real coordinator and confirm it hands the settings to the optimizer, the
+  retired 0.3.11 window key included.
+- `tests/test_battery_protect_target.py`: minimum-runtime-first and the
+  wider exemption. The test power states are now physically consistent, with
+  a deficit met by the battery rather than by import.
+- `tests/test_battery_protect_scenarios.py`: three 2026-09-23 replays.
+- Full suite: 1023 passed.
+
+**Seen but not changed** (pre-existing, not caused by the gate):
+
+- A must-run appliance can be shed with a few minutes' slack left and then
+  not restart before its window closes. The slack check in section 14 does
+  not allow for the switch interval.
+- At low PV, a grid-supplement start is shed on the next check once the
+  switch interval has passed. The appliance then cycles 10 min on and 10 min
+  off, and gets about half the grid-supplement time a cheap window would
+  suggest.
+
 ---
 
 ## Testing status

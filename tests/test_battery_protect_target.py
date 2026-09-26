@@ -69,10 +69,14 @@ def _state(is_on=False, runtime=timedelta(hours=6)):
 
 
 def _ps(excess, soc=90.0):
+    """Self-consumption: a deficit is met by the battery (discharging, no
+    import) unless SoC is unknown or empty; a surplus is exported."""
+    batt_covers = excess < 0 and soc is not None and soc > 0
     return PowerState(
         pv_production=4300.0, grid_export=max(excess, 0.0),
-        grid_import=max(-excess, 0.0), load_power=4300.0 - excess,
-        excess_power=float(excess), battery_soc=soc, battery_power=0.0,
+        grid_import=0.0 if batt_covers else max(-excess, 0.0),
+        load_power=4300.0 - excess, excess_power=float(excess), battery_soc=soc,
+        battery_power=float(excess) if batt_covers else 0.0,
         ev_soc=None, timestamp=datetime.now(),
     )
 
@@ -274,7 +278,8 @@ def _ps_flow(excess, soc, battery_power, grid_import):
 
 
 class TestGridChargeExemption:
-    """0.3.13: stand aside while the battery is already being grid-charged."""
+    """Stand aside while the battery is not supplying the house (0.3.13
+    forced grid charge; widened in 0.3.14 to idle or floor)."""
 
     def _decide(self, battery_power, grid_import):
         hist = [_ps_flow(1049, 90.0, battery_power, grid_import)] * 10
@@ -293,12 +298,29 @@ class TestGridChargeExemption:
         d = self._decide(battery_power=3000, grid_import=0)
         assert d.action != Action.ON, d.reason
 
-    def test_import_without_charging_still_blocked(self):
+    def test_battery_idle_or_at_floor_while_importing_allows(self):
+        """Standby, a discharge limit or an empty battery: load comes from
+        the grid, not the battery."""
         d = self._decide(battery_power=0, grid_import=1500)
+        assert d.action == Action.ON
+        assert "grid supplement" in d.reason.lower()
+
+    def test_discharging_at_limit_while_importing_still_blocked(self):
+        """Battery at its 9.6 kW discharge limit with the rest imported: the
+        battery is still supplying the house."""
+        d = self._decide(battery_power=-9600, grid_import=1500)
         assert d.action != Action.ON, d.reason
 
-    def test_below_thresholds_still_blocked(self):
-        d = self._decide(battery_power=400, grid_import=150)
+    def test_import_below_threshold_still_blocked(self):
+        d = self._decide(battery_power=0, grid_import=150)
+        assert d.action != Action.ON, d.reason
+
+    def test_small_discharge_counts_as_idle(self):
+        d = self._decide(battery_power=-150, grid_import=800)
+        assert d.action == Action.ON
+
+    def test_discharge_beyond_tolerance_blocked(self):
+        d = self._decide(battery_power=-250, grid_import=800)
         assert d.action != Action.ON, d.reason
 
     def test_shed_still_on_instantaneous_without_grid_charge(self):
@@ -307,3 +329,28 @@ class TestGridChargeExemption:
         hist = [_ps(500)] * 9 + [_ps_flow(-681, 90.0, -700, 0)]
         d = _run(cfg, _state(is_on=True), hist)
         assert d.action == Action.OFF, d.reason
+
+
+class TestMinimumRuntimeFirst:
+    """0.3.14: the gate does not apply until the appliance has met its
+    minimum daily runtime (3 h here)."""
+
+    def test_grid_supplement_allowed_below_minimum(self):
+        d = _run(_cfg(), _state(runtime=timedelta(hours=2, minutes=30)), [_ps(1049)] * 10)
+        assert d.action == Action.ON
+        assert "grid supplement" in d.reason.lower()
+
+    def test_blocked_once_minimum_met(self):
+        d = _run(_cfg(), _state(runtime=timedelta(hours=3)), [_ps(1049)] * 10)
+        assert d.action != Action.ON, d.reason
+
+    def test_no_minimum_configured_gate_applies(self):
+        d = _run(_cfg(min_daily_runtime=None), _state(runtime=timedelta(0)), [_ps(1049)] * 10)
+        assert d.action != Action.ON, d.reason
+
+    def test_shed_hold_kept_below_minimum(self):
+        cfg = _cfg(schedule_deadline=(datetime.now() + timedelta(hours=2)).time(),
+                   averaging_window=600)
+        hist = [_ps(500)] * 9 + [_ps(-681)]
+        d = _run(cfg, _state(is_on=True, runtime=timedelta(hours=1)), hist)
+        assert d.action == Action.ON, d.reason

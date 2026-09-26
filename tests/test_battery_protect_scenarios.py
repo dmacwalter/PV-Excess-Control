@@ -21,6 +21,7 @@ import pytest
 from .battery_protect_sim import (
     OFF,
     RECOMMENDED,
+    SEP23,
     Scenario,
     simulate,
     with_pool_window_ending,
@@ -45,6 +46,10 @@ SUNNY = [
     Scenario("today: PV collapses 14:30, charge 15:31", pv_fn=_collapse, grid_charge="late"),
 ] + [
     Scenario(f"today: cloud flicker seed {k}", noise=0.35, seed=k) for k in range(1, 4)
+] + [
+    Scenario(f"23 Sep: {gc}", profile=SEP23, soc0=64,
+             runtime0=timedelta(hours=1, minutes=50), grid_charge=gc)
+    for gc in ("midday", "none", "jit")
 ]
 
 CLOUDY_JIT = Scenario(
