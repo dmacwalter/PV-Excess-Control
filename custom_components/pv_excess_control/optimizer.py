@@ -611,6 +611,69 @@ class Optimizer:
         state = self._current_states.get(appliance.id)
         return state is not None and state.runtime_today < appliance.min_daily_runtime
 
+    def _must_run_due(self, appliance: ApplianceConfig, state: ApplianceState) -> bool:
+        """Same test the deadline must-run applies: minimum runtime not met and
+        time to the schedule deadline no more than 1.1x the runtime still owed.
+
+        Used so that a grid-supplement start, which is evaluated before
+        must-run, carries must-run's cooldown bypass when must-run is also
+        due. Without that, a grid-supplement ON inside the switch interval
+        was deferred and must-run was never reached, so the appliance could
+        miss its minimum. Found in randomised simulation (0.3.14).
+        """
+        if (appliance.schedule_deadline is None or appliance.min_daily_runtime is None
+                or state is None or state.runtime_today >= appliance.min_daily_runtime):
+            return False
+        from datetime import datetime
+        now = datetime.now(self._tz) if self._tz else datetime.now()
+        now_seconds = now.hour * 3600 + now.minute * 60 + now.second
+        deadline = appliance.schedule_deadline
+        deadline_seconds = deadline.hour * 3600 + deadline.minute * 60
+        if deadline_seconds <= now_seconds:
+            deadline_seconds += 86400
+        remaining = (appliance.min_daily_runtime - state.runtime_today).total_seconds()
+        return deadline_seconds - now_seconds <= remaining * 1.1
+
+    def _cheap_window_closing(self, appliance: ApplianceConfig, tariff: TariffInfo) -> bool:
+        """True when the current cheap window ends within one switch interval.
+
+        A grid-supplement start then commits the appliance past the end of
+        the cheap window: once on it cannot be switched off for
+        switch_interval, so it would run into the next (dearer) period. On
+        2026-09-26 simulation showed a start at 15:46 running until 15:56
+        into the 0.45 peak. Consecutive windows that are all cheap for the
+        appliance count as one. Without price windows this cannot be known
+        and returns False (previous behaviour).
+        """
+        if not tariff.windows or not appliance.switch_interval:
+            return False
+        from datetime import datetime
+        threshold = (appliance.cheap_price_threshold if appliance.cheap_price_threshold is not None
+                     else tariff.cheap_price_threshold)
+        windows = sorted(tariff.windows, key=lambda w: w.start)
+        now = None
+        end = None
+        for w in windows:
+            if now is None:
+                now = datetime.now(w.start.tzinfo) if w.start.tzinfo else datetime.now()
+            if end is None:
+                if w.start <= now < w.end and w.price <= threshold:
+                    end = w.end
+            elif w.start <= end and w.price <= threshold:
+                end = max(end, w.end)
+        if end is None:
+            return False
+        return (end - now).total_seconds() < appliance.switch_interval
+
+    def _grid_supplement_allowed(self, appliance: ApplianceConfig, tariff: TariffInfo) -> bool:
+        """Grid supplement is permitted for this appliance right now."""
+        return (
+            appliance.allow_grid_supplement
+            and self._is_cheap_for_appliance(tariff, appliance)
+            and not (appliance.battery_target_gated and self._battery_target_reached())
+            and not self._battery_protection_active(appliance)
+        )
+
     def _apply_safety_rules(
         self,
         appliance: ApplianceConfig,
@@ -1125,6 +1188,32 @@ class Optimizer:
                     off_threshold=self._off_threshold,
                     instant_budget=instant_budget,
                 )
+                # Grid-supplement hold (0.3.14). An appliance started on grid
+                # supplement was previously shed on the next check once the
+                # measured deficit showed its own grid draw, then refused a
+                # restart for the switch interval, cycling roughly 10 min on
+                # and 10 min off through a cheap window. While grid
+                # supplement is still permitted (cheap tariff, battery gates
+                # clear) and the grid share stays within max_grid_power, tag
+                # the decision as grid supplement so SHED leaves it running.
+                if (instant_budget < self._off_threshold
+                        and self._grid_supplement_allowed(appliance, tariff)):
+                    own_draw = state.current_power if state.current_power > 0 else appliance.nominal_power
+                    # Without an explicit max_grid_power the start branch
+                    # accepts up to nominal from grid; measured draw can sit
+                    # above nominal (a pool heater at ~1.95 kW against
+                    # 1.81 kW nominal), so allow the appliance's own draw.
+                    max_grid = (appliance.max_grid_power if appliance.max_grid_power is not None
+                                else max(appliance.nominal_power, own_draw))
+                    grid_share = min(own_draw, -instant_budget)
+                    if grid_share <= max_grid:
+                        effective_threshold = (appliance.cheap_price_threshold
+                                               if appliance.cheap_price_threshold is not None
+                                               else tariff.cheap_price_threshold)
+                        reason = (
+                            f"Grid supplement (staying on): {grid_share:.0f}W from grid "
+                            f"(tariff {tariff.current_price:.3f} <= threshold {effective_threshold:.3f})"
+                        )
                 return (
                     ControlDecision(
                         appliance_id=appliance.id,
@@ -1278,6 +1367,8 @@ class Optimizer:
             and self._is_cheap_for_appliance(tariff, appliance)
             and not (appliance.battery_target_gated and self._battery_target_reached())
             and not self._battery_protection_active(appliance)
+            and (not self._cheap_window_closing(appliance, tariff)
+                 or self._must_run_due(appliance, state))
         ):
             max_grid = appliance.max_grid_power if appliance.max_grid_power is not None else appliance.nominal_power
             solar_portion = max(avg_budget, 0.0)
@@ -1305,6 +1396,7 @@ class Optimizer:
                             f"threshold {effective_threshold:.3f})"
                         ),
                         overrides_plan=False,
+                        bypasses_cooldown=self._must_run_due(appliance, state),
                     ),
                     grid_power_consumed,  # Solar portion + dependency power from excess budget
                 )
@@ -1405,6 +1497,9 @@ class Optimizer:
                 and self._is_cheap_for_appliance(tariff, appliance)
                 and not (appliance.battery_target_gated and self._battery_target_reached())
                 and not self._battery_protection_active(appliance)
+                and (state.is_on
+                     or not self._cheap_window_closing(appliance, tariff)
+                     or self._must_run_due(appliance, state))
             ):
                 override_amps = self._cheap_window_target_amps(appliance, tariff, phases)
                 target_amps = override_amps if override_amps is not None else appliance.min_current
@@ -1430,6 +1525,7 @@ class Optimizer:
                         target_current=target_amps,
                         reason=reason,
                         overrides_plan=False,
+                        bypasses_cooldown=(not state.is_on and self._must_run_due(appliance, state)),
                     ),
                     solar_portion,  # Only deduct solar portion from excess budget
                 )
@@ -2037,7 +2133,11 @@ class Optimizer:
             state = state_by_id.get(app_id)
             if not force_shed and state is not None:
                 slack = self._runtime_slack_seconds(appliance, state)
-                if slack is not None and slack <= 0:
+                # Keep at least one switch interval of slack (0.3.14): once
+                # shed, the appliance cannot restart for switch_interval, so
+                # releasing it with less spare time than that can leave its
+                # minimum unmet.
+                if slack is not None and slack <= max(appliance.switch_interval or 0, 0):
                     _LOGGER.debug(
                         "  Skipping shed of %s: behind daily runtime "
                         "(%s < %s), no slack before deadline",

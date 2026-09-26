@@ -21,11 +21,13 @@ Modelled:
       today  - Predbat hold 12:16-14:15 (surplus exported, battery only
                covers deficit), then forced charge 15:31-15:50
       jit    - forced charge from the point where 7 kW + 3 min would only
-               just finish by the target time
+               just finish by the target time, then held until the target
+               time or 100% (as the charge on 2026-09-26 was held)
       export - Predbat force-exports 2.5 kW 12:15-14:00, then jit
       midday - forced charge 12:00-13:00 (as Predbat did on 2026-09-23)
-  - tariff as the price sensor reports it: 0.25 before 11:00, 0.18 to 15:50,
-    0.45 to 21:00; feed-in 0.06; cheap threshold 0.20
+  - tariff as the price sensor reports it, price_windows included: 0.25
+    before 11:00, 0.18 to 15:50, 0.45 to 21:00; feed-in 0.06; cheap
+    threshold 0.20
   - integration view: excess = export - import + battery charge power,
     SoC read as an integer %, 30 samples of history at 60 s
   - controller: 600 s switch interval, bypassed only for must-run
@@ -50,6 +52,7 @@ from custom_components.pv_excess_control.models import (
     Plan,
     PowerState,
     TariffInfo,
+    TariffWindow,
 )
 from custom_components.pv_excess_control.optimizer import Optimizer
 
@@ -93,6 +96,20 @@ def price(t: datetime) -> float:
     if hm < time(21, 0):
         return 0.45
     return 0.25
+
+
+def _windows() -> list[TariffWindow]:
+    """The price sensor's price_windows attribute, as on 2026-09-26."""
+    spans = [((0, 0), (11, 0), 0.25), ((11, 0), (15, 50), 0.18),
+             ((15, 50), (21, 0), 0.45), ((21, 0), (23, 59), 0.25)]
+    return [
+        TariffWindow(DAY.replace(hour=a[0], minute=a[1]), DAY.replace(hour=b[0], minute=b[1]),
+                     p, p <= 0.20)
+        for a, b, p in spans
+    ]
+
+
+WINDOWS = _windows()
 
 
 def max_charge_w(soc: float) -> float:
@@ -271,7 +288,11 @@ def simulate(sc: Scenario, st: Settings) -> Outcome:
             base_load = max(300.0, sc.profile.house[s] - sc.profile.pool[s])
             if sc.extra_load_fn:
                 base_load += sc.extra_load_fn(t)
-            charging = _charging(sc, t, soc)
+            if sc.grid_charge in ("jit", "export"):
+                # latch: once started, hold until target time or full
+                charging = (charging or _charging(sc, t, soc)) and soc < 100 and t < TARGET_TIME
+            else:
+                charging = _charging(sc, t, soc)
 
             pool_w = _pool_draw(t) if on else 0.0
             load = base_load + pool_w
@@ -294,7 +315,7 @@ def simulate(sc: Scenario, st: Settings) -> Outcome:
             )
             result = opt.optimize(
                 power_state=ps, appliances=[cfg], appliance_states=[state], plan=plan,
-                power_history=history, tariff=TariffInfo(price(t), 0.06, 0.20, 0.20),
+                power_history=history, tariff=TariffInfo(price(t), 0.06, 0.20, 0.20, WINDOWS),
                 plan_influence="light",
             )
             if opt._battery_protection_active(cfg) and out.gate_first is None:

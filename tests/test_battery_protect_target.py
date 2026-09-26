@@ -190,10 +190,12 @@ class TestShedWhileRunning:
         # above the off threshold while the instantaneous one is negative.
         return [_ps(500)] * 9 + [_ps(-681)]
 
-    def test_disabled_reproduces_the_hold(self):
+    def test_disabled_keeps_it_on_as_grid_supplement(self):
+        """Protection off, cheap tariff: since 0.3.14 the running pool is held
+        on as grid supplement rather than riding the averaged-excess skip."""
         d = _run(self._deadline_cfg(), _state(is_on=True), self._history(), rate=0)
         assert d.action == Action.ON
-        assert "shed imminent" in d.reason
+        assert "grid supplement (staying on)" in d.reason.lower()
 
     def test_sheds_on_instantaneous_when_engaged(self):
         d = _run(self._deadline_cfg(), _state(is_on=True), self._history())

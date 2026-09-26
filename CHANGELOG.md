@@ -663,15 +663,64 @@ mean runtime change is -8 to -10 min, all above the minimum.
 - `tests/test_battery_protect_scenarios.py`: three 2026-09-23 replays.
 - Full suite: 1023 passed.
 
-**Seen but not changed** (pre-existing, not caused by the gate):
+### 20. Grid supplement and must-run fixes (0.3.14)
 
-- A must-run appliance can be shed with a few minutes' slack left and then
-  not restart before its window closes. The slack check in section 14 does
-  not allow for the switch interval.
-- At low PV, a grid-supplement start is shed on the next check once the
-  switch interval has passed. The appliance then cycles 10 min on and 10 min
-  off, and gets about half the grid-supplement time a cheap window would
-  suggest.
+The same simulation turned up four faults that predate the battery gate.
+
+1. **Grid supplement cycled on and off.** An appliance started on grid
+   supplement was shed on the next check once its own grid draw showed as a
+   deficit. It could not restart until the switch interval had passed, so it
+   cycled about 10 min on and 10 min off through the cheap window. A running
+   non-dynamic appliance is now held on, with the reason "Grid supplement
+   (staying on)", while grid supplement is still permitted. That means a
+   cheap tariff, the battery gates clear, and the grid share within
+   `max_grid_power`. Without `max_grid_power` the appliance's own measured
+   draw is allowed, since a pool heater draws ~1.95 kW against 1.81 kW
+   nominal. SHED already leaves grid-supplement decisions alone.
+2. **Must-run was masked by grid supplement.** A grid-supplement start is
+   evaluated before must-run, but it did not carry must-run's cooldown
+   bypass. Inside the switch interval the start was deferred and must-run
+   was never reached. Grid-supplement starts now carry the bypass whenever
+   must-run is also due.
+3. **Slack ignored the switch interval.** SHED released an appliance still
+   owed runtime with any positive slack. Once shed, it could not restart for
+   the switch interval, so it could finish short. SHED now requires more
+   slack than the switch interval.
+4. **Starts too close to the end of a cheap window.** A grid-supplement
+   start less than one switch interval before the window ends commits the
+   appliance into the dearer period. In the simulation, a start at 15:46 ran
+   until 15:56 in the 0.45 peak. Such starts are now refused unless must-run
+   is due. This uses the price sensor's `price_windows` (consecutive cheap
+   windows merge). Without windows, behaviour is unchanged.
+
+**Results**, 250 random afternoons (same simulator, gate off, before/after):
+
+- Switchings per afternoon: 17.4 to 2.0.
+- Pool runtime: +45 min on average.
+- Minimum runtime met: 247/250 to 250/250.
+- Pool running in the peak: 2.5 to 1.7 min.
+- Overcast day: 36 switchings and 3 h become 2 switchings and 4 h 48 min,
+  with no peak running.
+
+**Trade-off.** In self-consumption, "grid supplement" draws from the battery
+until the battery is held or empty. With a grid charge that starts when
+needed, the extra runtime is refilled at 0.18 and SoC is unchanged. With
+fixed-time or no grid charging, mean SoC at the target is 1.3 to 4.9 points
+lower, and the battery gate recovers some of that. Across 1250 random
+scenarios with the gate on, three marginal cases fell outside the invariants:
+
+- SoC at target 1.2 points below off, twice.
+- 8 extra switchings once, with the battery at its floor.
+
+**Tests.**
+
+- `tests/test_grid_supplement_hold.py`: 17 tests. Each fix was reverted in
+  turn to confirm that at least one test fails.
+- Two new scenario tests: no cycling through the cheap window, and target
+  still reached with a just-in-time charge.
+- The simulator now supplies `price_windows` and holds a just-in-time grid
+  charge once started, as the real one was held on 2026-09-26.
+- Full suite: 1043 passed.
 
 ---
 

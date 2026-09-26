@@ -76,7 +76,11 @@ def _pair(sc):
 @pytest.mark.parametrize("sc", SUNNY + [CLOUDY_JIT], ids=lambda s: s.name)
 def test_no_cost_when_target_is_reachable(sc):
     off, on = _pair(sc)
-    assert on.runtime_end >= off.runtime_end - timedelta(minutes=10), on.log
+    # 15 min: with a cheap-tariff hold in place (0.3.14) the pool can run
+    # right up to the target when protection is off, while the gate stops it
+    # about one margin before the target if a grid charge has not started
+    # yet. Seen at 14 min in the cloudy just-in-time case.
+    assert on.runtime_end >= off.runtime_end - timedelta(minutes=15), on.log
     assert on.soc_at_target >= off.soc_at_target - 0.5
     assert on.after_target_from_battery_kwh <= off.after_target_from_battery_kwh + 0.05
 
@@ -118,3 +122,22 @@ def test_soc_unavailable_behaves_as_if_disabled():
     assert on.gate_first is None or on.gate_first.time() < time(14, 0)
     assert on.runtime_end >= off.runtime_end - timedelta(minutes=5)
     assert on.soc_at_target == pytest.approx(off.soc_at_target, abs=0.5)
+
+
+def test_grid_supplement_runs_through_cheap_window_without_cycling():
+    """0.3.14 grid-supplement hold. Before it, the overcast day cycled the
+    pool 10 min on / 10 min off (36 switchings, 3 h), and must-run then
+    pushed it into the peak. Now it runs through the 0.18 window."""
+    for st in (OFF, RECOMMENDED):
+        o = simulate(OVERCAST, st)
+        assert o.switches <= 4, o.log
+        assert o.runtime_end >= timedelta(hours=4, minutes=30), o.log
+        assert o.after_target_minutes == 0, o.log
+
+
+@pytest.mark.parametrize("sc", [OVERCAST, CLOUDY_JIT], ids=lambda s: s.name)
+def test_just_in_time_charge_still_reaches_target(sc):
+    """With a grid charge that starts when needed, the longer pool runtime
+    is refilled at 0.18 and the battery still reaches target."""
+    o = simulate(sc, RECOMMENDED)
+    assert o.soc_at_target >= 99.0, o.log
