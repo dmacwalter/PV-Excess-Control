@@ -16,7 +16,6 @@ import pytest
 from custom_components.pv_excess_control.const import (
     NotificationEvent,
 )
-from custom_components.pv_excess_control.controller import Controller
 from custom_components.pv_excess_control.energy import (
     AwattarProvider,
     GenericTariffProvider,
@@ -416,188 +415,58 @@ class TestEnergyProviderEdgeCases:
 # ===========================================================================
 
 
-class TestControllerEdgeCases:
-    """Edge cases for Controller.apply_decisions()."""
+class TestApplyDecisionsEdgeCases:
+    """Edge cases on the live apply path (coordinator._apply_decisions).
 
-    @pytest.mark.asyncio
-    async def test_unknown_entity_domain_no_service_call(self):
-        """Decisions for entities with an unrecognized domain are silently skipped.
+    These replace tests of controller.Controller, an unused duplicate of this
+    path that was removed in 0.3.16.
+    """
 
-        The controller only knows switch, climate, light, water_heater, input_boolean.
-        An entity like 'media_player.something' should not trigger any service call.
-        """
-        states_map = {
-            "media_player.lounge": _make_state("idle"),
-        }
-        hass = _make_hass(states_map)
-        controller = Controller(hass, {})
-        configs = [_make_appliance_config(
-            id="media_app",
-            entity_id="media_player.lounge",
-        )]
-        decisions = [
-            ControlDecision(
-                appliance_id="media_app",
-                action=Action.ON,
-                target_current=None,
-                reason="test",
-                overrides_plan=False,
-            ),
-        ]
-
-        applied = await controller.apply_decisions(decisions, configs)
-
-        # Applied tracks that we attempted the state change, but _turn_on does nothing
-        # for unknown domains. The decision is still "applied" (logged) but no service called.
-        hass.services.async_call.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_unknown_domain_turn_off_no_service_call(self):
-        """Turning OFF an entity with unknown domain does not call any service."""
-        states_map = {
-            "automation.my_auto": _make_state("on"),
-        }
-        hass = _make_hass(states_map)
-        controller = Controller(hass, {})
-        configs = [_make_appliance_config(
-            id="auto_1",
-            entity_id="automation.my_auto",
-        )]
-        decisions = [
-            ControlDecision(
-                appliance_id="auto_1",
-                action=Action.OFF,
-                target_current=None,
-                reason="test",
-                overrides_plan=False,
-            ),
-        ]
-
-        await controller.apply_decisions(decisions, configs)
-
-        hass.services.async_call.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_on_only_flag_prevents_off(self):
-        """on_only appliances cannot be turned off by the controller."""
-        states_map = {
-            "switch.boiler": _make_state("on"),
-        }
-        hass = _make_hass(states_map)
-        controller = Controller(hass, {})
-        configs = [_make_appliance_config(
-            id="boiler",
-            entity_id="switch.boiler",
-            on_only=True,
-        )]
-        decisions = [
-            ControlDecision(
-                appliance_id="boiler",
-                action=Action.OFF,
-                target_current=None,
-                reason="Insufficient excess",
-                overrides_plan=False,
-            ),
-        ]
-
-        applied = await controller.apply_decisions(decisions, configs)
-
-        # on_only prevents turning off
-        assert len(applied) == 0
-        hass.services.async_call.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_switch_interval_prevents_rapid_changes(self):
-        """A recently changed appliance is not switched again within the interval."""
-        states_map = {
-            "switch.washing_machine": _make_state("off"),
-        }
-        hass = _make_hass(states_map)
-        controller = Controller(hass, {})
-        configs = [_make_appliance_config(
-            switch_interval=3600,  # 1 hour interval
-        )]
-        # Simulate recent state change
-        controller._last_state_change["appliance_1"] = datetime.now() - timedelta(seconds=10)
-
-        decisions = [
-            ControlDecision(
-                appliance_id="appliance_1",
-                action=Action.ON,
-                target_current=None,
-                reason="test",
-                overrides_plan=False,
-            ),
-        ]
-
-        applied = await controller.apply_decisions(decisions, configs)
-
-        # Not enough time has elapsed; skip the change
-        assert len(applied) == 0
-        hass.services.async_call.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_light_domain_turn_on(self):
-        """Applies turn_on service for light domain entities."""
-        states_map = {
-            "light.pool_heater_indicator": _make_state("off"),
-        }
-        hass = _make_hass(states_map)
-        controller = Controller(hass, {})
-        configs = [_make_appliance_config(
-            id="pool_light",
-            entity_id="light.pool_heater_indicator",
-        )]
-        decisions = [
-            ControlDecision(
-                appliance_id="pool_light",
-                action=Action.ON,
-                target_current=None,
-                reason="excess solar",
-                overrides_plan=False,
-            ),
-        ]
-
-        applied = await controller.apply_decisions(decisions, configs)
-
-        assert len(applied) == 1
-        hass.services.async_call.assert_any_call(
-            "light", "turn_on", {"entity_id": "light.pool_heater_indicator"}
+    def _run(self, entity_id, action, *, bypass=False, recent_change=False):
+        import asyncio
+        from custom_components.pv_excess_control.models import (
+            BatteryDischargeAction, OptimizerResult,
         )
+        from .test_init import MockState, _make_config_entry, _make_coordinator
 
-    @pytest.mark.asyncio
-    async def test_water_heater_domain_turn_on(self):
-        """Applies turn_on service for water_heater domain entities."""
-        states_map = {
-            "water_heater.boiler": _make_state("off"),
+        sub = MagicMock()
+        sub.data = {
+            "appliance_name": "Thing", "appliance_entity": entity_id,
+            "appliance_priority": 500, "nominal_power": 200.0, "phases": 1,
+            "dynamic_current": False, "switch_interval": 300, "on_only": False,
+            "allow_grid_supplement": False, "is_big_consumer": False,
         }
-        hass = _make_hass(states_map)
-        controller = Controller(hass, {})
-        configs = [_make_appliance_config(
-            id="water_heater_1",
-            entity_id="water_heater.boiler",
-        )]
-        decisions = [
-            ControlDecision(
-                appliance_id="water_heater_1",
-                action=Action.ON,
-                target_current=None,
-                reason="excess solar",
-                overrides_plan=False,
-            ),
-        ]
-
-        applied = await controller.apply_decisions(decisions, configs)
-
-        assert len(applied) == 1
-        hass.services.async_call.assert_any_call(
-            "water_heater", "turn_on", {"entity_id": "water_heater.boiler"}
+        start = "off" if action == Action.ON else "on"
+        coord = _make_coordinator(states={entity_id: MockState(start)},
+                                  entry=_make_config_entry(subentries={"sub_1": sub}))
+        coord._get_appliance_configs()
+        if recent_change:
+            coord._last_state_change["sub_1"] = datetime.now() - timedelta(seconds=10)
+        result = OptimizerResult(
+            decisions=[ControlDecision(appliance_id="sub_1", action=action, target_current=None,
+                                       reason="test", overrides_plan=False,
+                                       bypasses_cooldown=bypass)],
+            battery_discharge_action=BatteryDischargeAction(should_limit=False,
+                                                            max_discharge_watts=None),
         )
+        asyncio.get_event_loop().run_until_complete(coord._apply_decisions(result))
+        return coord.hass.services.calls
 
+    def test_service_domain_follows_entity_domain(self):
+        for entity_id in ("light.pool_lamp", "water_heater.hws", "input_boolean.flag"):
+            calls = self._run(entity_id, Action.ON)
+            assert [(c[0], c[1]) for c in calls] == [(entity_id.split(".")[0], "turn_on")]
 
-# ===========================================================================
-# 4. Notification edge cases
-# ===========================================================================
+    def test_turn_off_uses_entity_domain(self):
+        calls = self._run("climate.study", Action.OFF)
+        assert [(c[0], c[1]) for c in calls] == [("climate", "turn_off")]
+
+    def test_switch_interval_blocks_change(self):
+        assert self._run("switch.thing", Action.ON, recent_change=True) == []
+
+    def test_bypass_flag_overrides_switch_interval(self):
+        calls = self._run("switch.thing", Action.OFF, bypass=True, recent_change=True)
+        assert [(c[0], c[1]) for c in calls] == [("switch", "turn_off")]
 
 
 class TestNotificationEdgeCases:

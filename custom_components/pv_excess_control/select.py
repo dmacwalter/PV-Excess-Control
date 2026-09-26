@@ -10,7 +10,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BatteryStrategy, CONF_BATTERY_STRATEGY, DOMAIN, MANUFACTURER
+from .const import CONF_BATTERY_STRATEGY, DOMAIN, MANUFACTURER
 from .coordinator import PvExcessCoordinator
 
 _LOGGER = logging.getLogger(__name__)

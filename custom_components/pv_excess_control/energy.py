@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import math
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from custom_components.pv_excess_control.const import TariffProvider as TariffProviderEnum

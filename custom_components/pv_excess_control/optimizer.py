@@ -1755,7 +1755,7 @@ class Optimizer:
                     appliance_id=idle_id,
                     action=Action.ON,
                     target_current=None,
-                    reason=f"Preemption: started after shedding lower-priority appliances",
+                    reason="Preemption: started after shedding lower-priority appliances",
                     overrides_plan=False,
                 )
             avg_budget -= power_consumed

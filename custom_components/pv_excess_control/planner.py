@@ -9,7 +9,7 @@ Pure Python - no HA dependencies.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from .models import (
@@ -862,9 +862,7 @@ class Planner:
             if appliance.min_daily_runtime is None:
                 continue
 
-            # Check if this appliance already has enough entries
             app_entries = [e for e in entries if e.appliance_id == appliance.id]
-            current_slots = len(app_entries)
 
             # Calculate how many additional slots to add based on how poor
             # tomorrow is. More poor = more additional slots.

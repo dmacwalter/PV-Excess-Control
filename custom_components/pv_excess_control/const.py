@@ -21,8 +21,6 @@ MIN_PRIORITY = 1
 MAX_PRIORITY = 1000
 MIN_CURRENT = 0.0
 MAX_CURRENT = 32.0
-MIN_PHASES = 1
-MAX_PHASES = 3
 
 # Largest per-appliance averaging_window a user can configure (seconds).
 # power_history must always retain enough samples to cover this, regardless

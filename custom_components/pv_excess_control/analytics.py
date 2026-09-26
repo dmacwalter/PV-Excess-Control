@@ -20,18 +20,6 @@ class ApplianceStats:
     savings_today: float = 0.0
 
 
-@dataclass
-class RunRecord:
-    """Record of a single appliance run period."""
-
-    appliance_id: str
-    start_time: datetime
-    power_watts: float
-    source: str  # "solar", "cheap_tariff", "grid"
-    tariff_price: float
-    feed_in_tariff: float
-
-
 class AnalyticsTracker:
     """Tracks energy analytics including savings and self-consumption ratios."""
 
