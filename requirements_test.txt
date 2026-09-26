@@ -1,3 +1,7 @@
-pytest==8.*
-pytest-asyncio==0.*
-pytest-homeassistant-custom-component==0.*
+# Test harness for Home Assistant 2026.9.x (needs Python 3.14).
+# pytest-homeassistant-custom-component pins matching pytest, pytest-asyncio
+# and freezegun versions itself. The previous loose 0.* pin resolved to
+# Home Assistant 2025.1 on Python 3.12, older than this integration's
+# declared minimum (2025.8) and without config subentries, which the
+# end-to-end tests in test_live_home_assistant.py need.
+pytest-homeassistant-custom-component==0.13.366

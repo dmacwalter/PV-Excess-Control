@@ -796,6 +796,31 @@ status message could silently change what got shed.
   failed after 14:00. They now pin it.
 - Full suite: 939 passed.
 
+### 23. End-to-end tests in a real Home Assistant (tests only, no release)
+
+`tests/test_live_home_assistant.py` loads the integration into a real Home
+Assistant instance. It sets up a config entry with an appliance subentry,
+forwards the platforms and runs the coordinator on its update timer. Sensors
+are fed minute by minute from the scenario simulator, and a stand-in pool is
+switched by the integration. There are four tests:
+
+- setup creates the expected entities and unloads cleanly;
+- a sunny day starts the pool once and runs it steadily on solar;
+- an overcast day holds it on grid supplement from 11:02 and stops it at
+  15:50;
+- cloud flicker does not cycle it.
+
+With the grid-supplement hold reverted, three of the four fail. Set
+`PVEC_TRACE_DIR` to write a minute-by-minute trace of switch calls, every
+entity state and analytics, for diffing two versions. Used this way, 0.3.15
+and 0.3.16 produced identical traces on four days.
+
+`requirements_test.txt` now pins `pytest-homeassistant-custom-component`
+0.13.366 (Home Assistant 2026.9.3, Python 3.14). The old loose pin resolved
+to Home Assistant 2025.1, which is older than the declared minimum (2025.8)
+and has no config subentries. The full suite passes on the new pin: 943
+tests.
+
 ---
 
 ## Testing status
