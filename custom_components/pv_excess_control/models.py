@@ -239,6 +239,11 @@ class ControlDecision:
     reason: str
     overrides_plan: bool
     bypasses_cooldown: bool = False
+    # Part of this appliance's draw is deliberately taken from the grid
+    # (cheap tariff or opportunity cost). SHED leaves such decisions alone,
+    # the battery discharge block applies, and analytics attribute the energy
+    # to the cheap tariff. Replaces matching "grid supplement" in the reason.
+    grid_supplement: bool = False
 
 
 @dataclass(frozen=True)

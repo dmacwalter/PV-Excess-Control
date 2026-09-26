@@ -448,28 +448,53 @@ class Optimizer:
             return False
         return self._current_battery_soc >= (battery_target.target_soc - margin)
 
-    def _must_run_due(self, appliance: ApplianceConfig, state: ApplianceState) -> bool:
-        """Same test the deadline must-run applies: minimum runtime not met and
-        time to the schedule deadline no more than 1.1x the runtime still owed.
+    def _until_deadline(self, deadline: time) -> tuple[int, bool]:
+        """Seconds to the next occurrence of a time-of-day deadline, and
+        whether that occurrence is tomorrow (it is at or before now today).
 
-        Used so that a grid-supplement start, which is evaluated before
-        must-run, carries must-run's cooldown bypass when must-run is also
-        due. Without that, a grid-supplement ON inside the switch interval
-        was deferred and must-run was never reached, so the appliance could
-        miss its minimum. Found in randomised simulation (0.3.14).
+        The single place this arithmetic lives: must-run, the must-run check
+        on grid-supplement starts and SHED's runtime slack must agree, or
+        SHED and must-run fight one cycle apart.
         """
-        if (appliance.schedule_deadline is None or appliance.min_daily_runtime is None
-                or state is None or state.runtime_today >= appliance.min_daily_runtime):
-            return False
         from datetime import datetime
         now = datetime.now(self._tz) if self._tz else datetime.now()
         now_seconds = now.hour * 3600 + now.minute * 60 + now.second
-        deadline = appliance.schedule_deadline
         deadline_seconds = deadline.hour * 3600 + deadline.minute * 60
-        if deadline_seconds <= now_seconds:
+        overnight = deadline_seconds <= now_seconds
+        if overnight:
             deadline_seconds += 86400
-        remaining = (appliance.min_daily_runtime - state.runtime_today).total_seconds()
-        return deadline_seconds - now_seconds <= remaining * 1.1
+        return deadline_seconds - now_seconds, overnight
+
+    def _must_run_reason(self, appliance: ApplianceConfig, state: ApplianceState) -> str | None:
+        """Reason text if the deadline must-run applies now, else None.
+
+        Must-run applies when the minimum daily runtime is not yet met and the
+        time to schedule_deadline is no more than 1.1x the runtime still owed.
+        """
+        if (appliance.schedule_deadline is None or appliance.min_daily_runtime is None
+                or state is None or state.runtime_today >= appliance.min_daily_runtime):
+            return None
+        deadline = appliance.schedule_deadline
+        remaining_runtime = (appliance.min_daily_runtime - state.runtime_today).total_seconds()
+        time_until_deadline, overnight = self._until_deadline(deadline)
+        if time_until_deadline > remaining_runtime * 1.1:  # 10% buffer
+            return None
+        deadline_label = deadline.strftime("%H:%M") + (" (tomorrow)" if overnight else "")
+        return (
+            f"Deadline must-run: {format_duration(remaining_runtime)} "
+            f"remaining, deadline {deadline_label} "
+            f"(in {format_duration(time_until_deadline)})"
+        )
+
+    def _must_run_due(self, appliance: ApplianceConfig, state: ApplianceState) -> bool:
+        """True when the deadline must-run applies.
+
+        Grid-supplement starts are evaluated before must-run, so they carry
+        must-run's cooldown bypass when it is also due. Without that, a
+        grid-supplement ON inside the switch interval was deferred and
+        must-run was never reached (0.3.14).
+        """
+        return self._must_run_reason(appliance, state) is not None
 
     def _cheap_window_closing(self, appliance: ApplianceConfig, tariff: TariffInfo) -> bool:
         """True when the current cheap window ends within one switch interval.
@@ -1004,6 +1029,7 @@ class Optimizer:
                             target_current=target_amps,
                             reason=reason,
                             overrides_plan=False,
+                            grid_supplement=True,
                         ),
                         solar_delta,
                     )
@@ -1019,6 +1045,7 @@ class Optimizer:
                 )
             else:
                 # Non-dynamic: keep ON, no new allocation needed
+                held_on_grid = False
                 reason = _format_staying_on_standard(
                     current_power=state.current_power,
                     off_threshold=self._off_threshold,
@@ -1050,6 +1077,7 @@ class Optimizer:
                             f"Grid supplement (staying on): {grid_share:.0f}W from grid "
                             f"(tariff {tariff.current_price:.3f} <= threshold {effective_threshold:.3f})"
                         )
+                        held_on_grid = True
                 return (
                     ControlDecision(
                         appliance_id=appliance.id,
@@ -1057,6 +1085,7 @@ class Optimizer:
                         target_current=None,
                         reason=reason,
                         overrides_plan=False,
+                        grid_supplement=held_on_grid,
                     ),
                     0.0,  # Already consuming, already in measured excess
                 )
@@ -1093,6 +1122,7 @@ class Optimizer:
                             f"buy grid at {tariff.current_price:.3f}): {target_amps:.1f}A"
                         ),
                         overrides_plan=False,
+                        grid_supplement=True,
                     ),
                     0.0,  # Don't deduct from solar excess -- appliance runs from grid
                 )
@@ -1106,6 +1136,7 @@ class Optimizer:
                         f"buy grid at {tariff.current_price:.3f})"
                     ),
                     overrides_plan=False,
+                    grid_supplement=True,
                 ),
                 0.0,  # Don't deduct from solar excess -- appliance runs from grid
             )
@@ -1198,9 +1229,7 @@ class Optimizer:
         # Only deduct the solar portion from the excess budget; the grid portion
         # is intentionally imported and should not make avg_budget negative.
         if (
-            appliance.allow_grid_supplement
-            and self._is_cheap_for_appliance(tariff, appliance)
-            and not (appliance.battery_target_gated and self._battery_target_reached())
+            self._grid_supplement_allowed(appliance, tariff)
             and (not self._cheap_window_closing(appliance, tariff)
                  or self._must_run_due(appliance, state))
         ):
@@ -1231,49 +1260,25 @@ class Optimizer:
                         ),
                         overrides_plan=False,
                         bypasses_cooldown=self._must_run_due(appliance, state),
+                        grid_supplement=True,
                     ),
                     grid_power_consumed,  # Solar portion + dependency power from excess budget
                 )
 
         # Deadline must-run: force ON if deadline is approaching and min_runtime not met
-        if (
-            appliance.schedule_deadline is not None
-            and appliance.min_daily_runtime is not None
-            and state.runtime_today < appliance.min_daily_runtime
-        ):
-            from datetime import datetime
-            current_time = datetime.now(self._tz).time() if self._tz else datetime.now().time()
-            deadline = appliance.schedule_deadline
-            remaining_runtime = (appliance.min_daily_runtime - state.runtime_today).total_seconds()
-
-            # Calculate time until deadline
-            now_seconds = current_time.hour * 3600 + current_time.minute * 60 + current_time.second
-            deadline_seconds = deadline.hour * 3600 + deadline.minute * 60
-            is_overnight = deadline_seconds <= now_seconds
-            if is_overnight:
-                deadline_seconds += 86400  # overnight deadline
-            time_until_deadline = deadline_seconds - now_seconds
-
-            if time_until_deadline <= remaining_runtime * 1.1:  # 10% buffer
-                deadline_label = deadline.strftime("%H:%M") + (
-                    " (tomorrow)" if is_overnight else ""
-                )
-                reason = (
-                    f"Deadline must-run: {format_duration(remaining_runtime)} "
-                    f"remaining, deadline {deadline_label} "
-                    f"(in {format_duration(time_until_deadline)})"
-                )
-                return (
-                    ControlDecision(
-                        appliance_id=appliance.id,
-                        action=Action.ON,
-                        target_current=None,
-                        reason=reason,
-                        overrides_plan=False,
-                        bypasses_cooldown=True,
-                    ),
-                    appliance.nominal_power,
-                )
+        must_run = self._must_run_reason(appliance, state)
+        if must_run:
+            return (
+                ControlDecision(
+                    appliance_id=appliance.id,
+                    action=Action.ON,
+                    target_current=None,
+                    reason=must_run,
+                    overrides_plan=False,
+                    bypasses_cooldown=True,
+                ),
+                appliance.nominal_power,
+            )
 
         return (
             ControlDecision(
@@ -1327,9 +1332,7 @@ class Optimizer:
         if avg_budget < min_watts_needed:
             # Not enough excess — try grid supplementation if tariff is cheap
             if (
-                appliance.allow_grid_supplement
-                and self._is_cheap_for_appliance(tariff, appliance)
-                and not (appliance.battery_target_gated and self._battery_target_reached())
+                self._grid_supplement_allowed(appliance, tariff)
                 and (state.is_on
                      or not self._cheap_window_closing(appliance, tariff)
                      or self._must_run_due(appliance, state))
@@ -1359,47 +1362,25 @@ class Optimizer:
                         reason=reason,
                         overrides_plan=False,
                         bypasses_cooldown=(not state.is_on and self._must_run_due(appliance, state)),
+                        grid_supplement=True,
                     ),
                     solar_portion,  # Only deduct solar portion from excess budget
                 )
 
             # Deadline must-run: force ON at minimum current if deadline is approaching
-            if (
-                appliance.schedule_deadline is not None
-                and appliance.min_daily_runtime is not None
-                and state.runtime_today < appliance.min_daily_runtime
-            ):
-                from datetime import datetime
-                current_time = datetime.now(self._tz).time() if self._tz else datetime.now().time()
-                deadline = appliance.schedule_deadline
-                remaining_runtime = (appliance.min_daily_runtime - state.runtime_today).total_seconds()
-                now_seconds = current_time.hour * 3600 + current_time.minute * 60 + current_time.second
-                deadline_seconds = deadline.hour * 3600 + deadline.minute * 60
-                is_overnight = deadline_seconds <= now_seconds
-                if is_overnight:
-                    deadline_seconds += 86400
-                time_until_deadline = deadline_seconds - now_seconds
-                if time_until_deadline <= remaining_runtime * 1.1:
-                    min_power = appliance.min_current * self.grid_voltage * phases
-                    deadline_label = deadline.strftime("%H:%M") + (
-                        " (tomorrow)" if is_overnight else ""
-                    )
-                    reason = (
-                        f"Deadline must-run: {format_duration(remaining_runtime)} "
-                        f"remaining, deadline {deadline_label} "
-                        f"(in {format_duration(time_until_deadline)})"
-                    )
-                    return (
-                        ControlDecision(
-                            appliance_id=appliance.id,
-                            action=Action.SET_CURRENT,
-                            target_current=appliance.min_current,
-                            reason=reason,
-                            overrides_plan=False,
-                            bypasses_cooldown=True,
-                        ),
-                        min_power,
-                    )
+            must_run = self._must_run_reason(appliance, state)
+            if must_run:
+                return (
+                    ControlDecision(
+                        appliance_id=appliance.id,
+                        action=Action.SET_CURRENT,
+                        target_current=appliance.min_current,
+                        reason=must_run,
+                        overrides_plan=False,
+                        bypasses_cooldown=True,
+                    ),
+                    appliance.min_current * self.grid_voltage * phases,
+                )
 
             return (
                 ControlDecision(
@@ -1444,6 +1425,7 @@ class Optimizer:
                         f"({power_consumed:.0f}W, {natural_power:.0f}W solar)"
                     ),
                     overrides_plan=False,
+                    grid_supplement=True,
                 ),
                 natural_power,
             )
@@ -1666,7 +1648,7 @@ class Optimizer:
                 if app.override_active:
                     continue
                 # Never preempt grid-supplemented
-                if "grid supplement" in decision.reason.lower():
+                if decision.grid_supplement:
                     continue
                 # Never preempt dependency-protected (has dependents that are ON)
                 if app.id in self._reverse_deps:
@@ -1817,20 +1799,11 @@ class Optimizer:
         if deadline is None:
             return None
 
-        from datetime import datetime
-        now = datetime.now(self._tz) if self._tz else datetime.now()
-        now_seconds = now.hour * 3600 + now.minute * 60 + now.second
-        deadline_seconds = deadline.hour * 3600 + deadline.minute * 60
-        if deadline_seconds <= now_seconds:
-            # Overnight: point at the next occurrence, matching the must-run
-            # arithmetic in _allocate_appliance. The two must agree, or SHED
-            # and must-run fight one cycle apart.
-            deadline_seconds += 86400
-
+        time_until_deadline, _ = self._until_deadline(deadline)
         remaining_runtime = (
             appliance.min_daily_runtime - state.runtime_today
         ).total_seconds()
-        return (deadline_seconds - now_seconds) - (remaining_runtime * 1.1)
+        return time_until_deadline - (remaining_runtime * 1.1)
 
     def _deadline_passed(self, deadline: time) -> bool:
         """Return True if the given time-of-day deadline has already
@@ -1906,7 +1879,7 @@ class Optimizer:
             if decision.bypasses_cooldown:
                 continue
             # Skip grid-supplemented appliances (they consume from grid, not solar)
-            if "grid supplement" in decision.reason.lower():
+            if decision.grid_supplement:
                 continue
             # Never shed a dependency while any dependent is still running
             if appliance.id in self._reverse_deps:
@@ -2211,7 +2184,7 @@ class Optimizer:
         grid_supplement_decisions = [
             d for d in decisions
             if d.action in (Action.ON, Action.SET_CURRENT)
-            and "grid supplement" in d.reason.lower()
+            and d.grid_supplement
         ]
         if grid_supplement_decisions or force_charge or auto_grid_charge_engaged:
             if grid_supplement_decisions:

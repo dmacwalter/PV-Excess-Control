@@ -1196,8 +1196,8 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 app_state = appliance_states.get(decision.appliance_id)
                 power = (app_state.current_power if app_state and app_state.current_power > 0
                          else config.nominal_power if config else 0)
-                # M9: Use decision reason to correctly attribute grid-supplemented consumption
-                if "grid supplement" in decision.reason.lower():
+                # M9: attribute grid-supplemented consumption to the cheap tariff
+                if decision.grid_supplement:
                     source = "cheap_tariff"
                 elif power_state.excess_power is not None and power_state.excess_power > 0:
                     source = "solar"

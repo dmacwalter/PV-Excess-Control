@@ -2587,16 +2587,22 @@ class TestDeadlineReasonStrings:
         """non-dynamic deadline must-run path."""
         from custom_components.pv_excess_control.optimizer import Optimizer
 
+        from freezegun import freeze_time
+
         fx = self._build_fixture(dynamic=False)
         opt = _optimizer_for_tests()
-        result = opt.optimize(
-            power_state=fx["power_state"],
-            appliances=[fx["appliance"]],
-            appliance_states=[fx["state"]],
-            plan=fx["plan"],
-            power_history=[fx["power_state"]],
-            tariff=fx["tariff"],
-        )
+        # Pin the clock before the 14:00 deadline; after it the reason
+        # correctly reads "deadline 14:00 (tomorrow)" and this check failed
+        # whenever the suite ran in the afternoon.
+        with freeze_time(datetime(2026, 4, 6, 13, 0, 0)):
+            result = opt.optimize(
+                power_state=fx["power_state"],
+                appliances=[fx["appliance"]],
+                appliance_states=[fx["state"]],
+                plan=fx["plan"],
+                power_history=[fx["power_state"]],
+                tariff=fx["tariff"],
+            )
         decision = result.decisions[0]
         self._assert_new_deadline_format(decision.reason)
 
@@ -2604,16 +2610,22 @@ class TestDeadlineReasonStrings:
         """dynamic current deadline must-run path."""
         from custom_components.pv_excess_control.optimizer import Optimizer
 
+        from freezegun import freeze_time
+
         fx = self._build_fixture(dynamic=True)
         opt = _optimizer_for_tests()
-        result = opt.optimize(
-            power_state=fx["power_state"],
-            appliances=[fx["appliance"]],
-            appliance_states=[fx["state"]],
-            plan=fx["plan"],
-            power_history=[fx["power_state"]],
-            tariff=fx["tariff"],
-        )
+        # Pin the clock before the 14:00 deadline; after it the reason
+        # correctly reads "deadline 14:00 (tomorrow)" and this check failed
+        # whenever the suite ran in the afternoon.
+        with freeze_time(datetime(2026, 4, 6, 13, 0, 0)):
+            result = opt.optimize(
+                power_state=fx["power_state"],
+                appliances=[fx["appliance"]],
+                appliance_states=[fx["state"]],
+                plan=fx["plan"],
+                power_history=[fx["power_state"]],
+                tariff=fx["tariff"],
+            )
         decision = result.decisions[0]
         self._assert_new_deadline_format(decision.reason)
 
@@ -4727,6 +4739,7 @@ class TestPhase4CheapTariffDischargeBlock:
         return ControlDecision(
             appliance_id=appliance_id, action=action,
             target_current=None, reason=reason, overrides_plan=False,
+            grid_supplement=reason.lower().startswith("grid supplement"),
         )
 
     def test_cheap_window_override_decision_blocks_discharge(self):

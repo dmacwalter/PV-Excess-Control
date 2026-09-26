@@ -752,6 +752,50 @@ fixes.
   depend on the wall clock and fail after 14:00 UTC. They fail the same way
   on v0.3.10.
 
+### 22. Streamlining, no behaviour change (0.3.16)
+
+The integration drops from 11,593 to 11,121 lines.
+
+**Dead code removed.**
+
+- `controller.py` (432 lines) was an unused duplicate of the coordinator's
+  sensor-reading and apply path. It was inherited from upstream, and nothing
+  imported it except its own tests.
+- Unused imports, constants, a local variable and the `RunRecord` dataclass.
+- Its tests went with it, except the ones that still describe live
+  behaviour. Those were rewritten against `coordinator._apply_decisions`:
+  service domain follows the entity domain, the switch interval blocks
+  changes, and the bypass flag overrides it.
+
+**Repeated logic consolidated in the optimizer.**
+
+- Deadline arithmetic was written out four times: must-run standard,
+  must-run dynamic, the must-run check on grid-supplement starts, and SHED's
+  runtime slack. It now lives in `_until_deadline()`.
+- The must-run test and reason text were duplicated. They now live in
+  `_must_run_reason()`.
+- Both grid-supplement start sites now use `_grid_supplement_allowed()`.
+
+**Grid supplement is an explicit flag, not a word in the reason.**
+
+`ControlDecision.grid_supplement` replaces four checks for "grid supplement"
+in the reason text: the SHED skip, the pre-emption skip, the battery
+discharge block, and analytics source attribution. Previously, rewording a
+status message could silently change what got shed.
+
+**Verification.**
+
+- While developing, a temporary assertion checked on every decision that
+  the flag matched the old text test. It held across the whole suite and 278
+  simulated afternoons.
+- Every optimizer decision (action, current, reason text, cooldown bypass)
+  and the battery discharge action, minute by minute across those 278
+  afternoons, is identical before and after. That covers 218 with the pool
+  as configured and 60 as a variable-current appliance.
+- Two upstream tests in `TestDeadlineReasonStrings` read the real clock and
+  failed after 14:00. They now pin it.
+- Full suite: 939 passed.
+
 ---
 
 ## Testing status
