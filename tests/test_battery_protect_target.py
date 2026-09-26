@@ -1,6 +1,6 @@
 """Tests for battery target protection (feasibility gate).
 
-Reproduces 2026-09-26. Battery target 100% by 16:00. At 15:21 with SoC 90%
+Reproduces 2026-09-26. Battery target 100% by 15:50. At 15:21 with SoC 90%
 the pool (1810 W nominal) was started on grid supplement because the 14C
 day rate (0.18) sat under the 0.20 cheap threshold, with only ~1049 W of
 averaged excess against 2010 W needed. Once running it was held on through
@@ -19,7 +19,10 @@ grid charge from 15:31 reached 99% by 15:49 (about 7 kW across 90-99%).
 at the assured rate, plus a margin, before the target time. With the rate at
 0 the behaviour must be exactly as upstream.
 """
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from custom_components.pv_excess_control.const import Action, BatteryStrategy
 from custom_components.pv_excess_control.models import (
@@ -36,7 +39,7 @@ CAPACITY_KWH = 22.4
 RATE_W = 7000
 MARGIN_MIN = 5
 # 10% of 22.4 kWh at 7 kW is 19.2 min, plus 5 min margin = 24.2 min.
-RECOVERABLE = timedelta(minutes=39)   # 15:21 against a 16:00 target
+RECOVERABLE = timedelta(minutes=29)   # 15:21 against the 15:50 target
 TOO_LATE = timedelta(minutes=20)
 
 
@@ -117,7 +120,7 @@ class TestGridSupplementStart:
         assert "grid supplement" in d.reason.lower()
 
     def test_allowed_while_battery_can_still_recover(self):
-        """The 15:21 case: 18c pre-peak, 24 min needed, 39 min left."""
+        """The 15:21 case: 18c pre-peak, 24 min needed, 29 min left."""
         d = _run(_cfg(), _state(), [_ps(1049)] * 10,
                  plan=_plan(target_in=RECOVERABLE))
         assert d.action == Action.ON
@@ -133,7 +136,7 @@ class TestGridSupplementStart:
         assert "grid supplement" in d.reason.lower()
 
     def test_bigger_shortfall_engages_earlier(self):
-        """50% short is 80 min at 7 kW, so 39 min out is already too late."""
+        """50% short is 96 + 5 min at 7 kW, so 29 min out is already too late."""
         d = _run(_cfg(), _state(), [_ps(1049, soc=50.0)] * 10,
                  plan=_plan(target_in=RECOVERABLE))
         assert d.action != Action.ON, d.reason
@@ -217,3 +220,90 @@ class TestCheapWindowOverride:
         opt._current_battery_soc = 90.0
         cfg = _cfg(dynamic_current=True, cheap_grid_target_current=16.0)
         assert opt._cheap_window_target_amps(cfg, TARIFF, 1) == 16.0
+
+
+class TestTwoStageChargeModel:
+    """0.3.13: bulk rate below the taper SoC, assured rate above it."""
+
+    def _opt(self, bulk=9000, taper=90):
+        o = Optimizer(
+            grid_voltage=240, battery_protect_charge_rate_w=6000,
+            battery_protect_margin_minutes=0, battery_capacity_kwh=22.4,
+            battery_protect_bulk_rate_w=bulk, battery_protect_taper_soc=taper,
+        )
+        return o
+
+    def test_from_low_soc_splits_at_taper(self):
+        # 40->90% = 11.2 kWh at 9 kW (74.7 min) + 90->100% = 2.24 kWh at 6 kW (22.4 min)
+        t = self._opt()._battery_protect_charge_time(40, 100)
+        assert t.total_seconds() / 60 == pytest.approx(97.07, abs=0.05)
+
+    def test_above_taper_uses_assured_rate_only(self):
+        t = self._opt()._battery_protect_charge_time(95, 100)
+        assert t.total_seconds() / 60 == pytest.approx(11.2, abs=0.05)
+
+    def test_target_below_taper_uses_bulk_only(self):
+        t = self._opt()._battery_protect_charge_time(40, 80)
+        assert t.total_seconds() / 60 == pytest.approx(59.73, abs=0.05)
+
+    def test_no_bulk_rate_is_single_rate(self):
+        t = self._opt(bulk=0)._battery_protect_charge_time(40, 100)
+        assert t.total_seconds() / 60 == pytest.approx(134.4, abs=0.05)
+
+    def test_bulk_rate_delays_engagement_from_low_soc(self):
+        """SoC 40 with 110 min left: single-rate says 134 + 10 min needed
+        (engaged), two-stage says 97 + 10 (not yet)."""
+        plan = _plan(target_in=timedelta(minutes=110))
+        hist = [_ps(1049, soc=40.0)] * 10
+        single = Optimizer(grid_voltage=240, controller_interval=60,
+                           battery_protect_charge_rate_w=6000,
+                           battery_protect_margin_minutes=10, battery_capacity_kwh=22.4)
+        two = Optimizer(grid_voltage=240, controller_interval=60,
+                        battery_protect_charge_rate_w=6000,
+                        battery_protect_margin_minutes=10, battery_capacity_kwh=22.4,
+                        battery_protect_bulk_rate_w=9000)
+        kw = dict(power_state=hist[-1], appliances=[_cfg()], appliance_states=[_state()],
+                  plan=plan, power_history=hist, tariff=TARIFF, plan_influence="none")
+        assert single.optimize(**kw).decisions[0].action != Action.ON
+        assert two.optimize(**kw).decisions[0].action == Action.ON
+
+
+def _ps_flow(excess, soc, battery_power, grid_import):
+    return replace(_ps(excess, soc=soc), battery_power=battery_power,
+                   grid_import=grid_import, grid_export=0.0)
+
+
+class TestGridChargeExemption:
+    """0.3.13: stand aside while the battery is already being grid-charged."""
+
+    def _decide(self, battery_power, grid_import):
+        hist = [_ps_flow(1049, 90.0, battery_power, grid_import)] * 10
+        return _run(_cfg(), _state(), hist)  # TOO_LATE plan: gate would engage
+
+    def test_charging_while_importing_allows_grid_supplement(self):
+        d = self._decide(battery_power=7500, grid_import=4000)
+        assert d.action == Action.ON
+        assert "grid supplement" in d.reason.lower()
+
+    def test_self_use_discharge_still_blocked(self):
+        d = self._decide(battery_power=-1500, grid_import=0)
+        assert d.action != Action.ON, d.reason
+
+    def test_charging_from_surplus_not_mistaken_for_grid_charge(self):
+        d = self._decide(battery_power=3000, grid_import=0)
+        assert d.action != Action.ON, d.reason
+
+    def test_import_without_charging_still_blocked(self):
+        d = self._decide(battery_power=0, grid_import=1500)
+        assert d.action != Action.ON, d.reason
+
+    def test_below_thresholds_still_blocked(self):
+        d = self._decide(battery_power=400, grid_import=150)
+        assert d.action != Action.ON, d.reason
+
+    def test_shed_still_on_instantaneous_without_grid_charge(self):
+        cfg = _cfg(schedule_deadline=(datetime.now() + timedelta(hours=2)).time(),
+                   averaging_window=600)
+        hist = [_ps(500)] * 9 + [_ps_flow(-681, 90.0, -700, 0)]
+        d = _run(cfg, _state(is_on=True), hist)
+        assert d.action == Action.OFF, d.reason

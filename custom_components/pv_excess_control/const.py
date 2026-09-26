@@ -185,6 +185,18 @@ CONF_BATTERY_PROTECT_CHARGE_RATE = "battery_protect_charge_rate_w"
 CONF_BATTERY_PROTECT_MARGIN = "battery_protect_margin_minutes"
 DEFAULT_BATTERY_PROTECT_CHARGE_RATE = 0
 DEFAULT_BATTERY_PROTECT_MARGIN = 5
+# 0.3.13: two-stage charge model. Below the taper SoC the battery is assumed
+# to charge at the bulk rate; from the taper SoC up, at the assured rate.
+# A bulk rate of 0 means "use the assured rate throughout" (0.3.12 behaviour).
+CONF_BATTERY_PROTECT_BULK_RATE = "battery_protect_bulk_rate_w"
+CONF_BATTERY_PROTECT_TAPER_SOC = "battery_protect_taper_soc"
+DEFAULT_BATTERY_PROTECT_BULK_RATE = 0
+DEFAULT_BATTERY_PROTECT_TAPER_SOC = 90
+# 0.3.13: the gate stands aside while the battery is already being charged
+# from the grid (charging and importing at once). Grid-fed appliance load
+# then does not slow the battery.
+BATTERY_PROTECT_GRID_CHARGE_MIN_W = 500
+BATTERY_PROTECT_GRID_IMPORT_MIN_W = 200
 
 # Inverter forced grid-charge (auto + manual)
 CONF_AUTO_BATTERY_GRID_CHARGE = "auto_battery_grid_charge"

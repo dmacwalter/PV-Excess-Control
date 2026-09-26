@@ -26,7 +26,7 @@ changes are intended to be offered back upstream.
 | Battery power during grid charge | Can be double-counted as "excess" | Grid-charge false-positive fix |
 | SHED near appliance deadlines | Reacts to instantaneous excess only | Deadline-aware shed protection via per-appliance averaged excess |
 | Appliance running post-deadline | No battery-state check | Blocked unless battery met its target |
-| Last hours before battery target | Grid supplement and averaged-excess shed skip unaffected by SoC | Optional gate closes both once the battery can no longer be charged to target in time (0.3.12; fixed window in 0.3.11) |
+| Last hours before battery target | Grid supplement and averaged-excess shed skip unaffected by SoC | Optional gate closes both once the battery can no longer be charged to target in time, two-stage charge model, stands aside during grid charging (0.3.13; 0.3.12 single rate; 0.3.11 fixed window) |
 
 ---
 
@@ -494,7 +494,7 @@ appliance off the battery shortly before `battery_target_time`:
 The post-deadline battery lock (item 7) only engages at the target time itself,
 which is too late to help.
 
-Observed 2026-09-26, target 100% by 16:00: at 15:21, with SoC 90%, the pool
+Observed 2026-09-26, target 100% by 15:50: at 15:21, with SoC 90%, the pool
 started on `Grid supplement: 298W from grid (tariff 0.180 <= threshold 0.200)`
 with 1049 W of averaged excess against 2010 W needed. It then logged
 "shed imminent" at -681, -1228 and -1064 W without shedding, while the battery
@@ -553,14 +553,67 @@ deadline-aware averaged-excess skip. The same exemptions apply
 (`battery_target_gated`, deadline must-run), and missing data, including an
 unset `battery_capacity`, never engages it.
 
-With 22.4 kWh, 7000 W and 5 min, today's 15:21 start (10% short, 39 min left)
-is allowed: 19 + 5 min needed. The gate would close at about 24 minutes out
+With 22.4 kWh, 7000 W and 5 min, the 15:21 start on 2026-09-26 (10% short,
+29 min left to 15:50) is allowed: 19 + 5 min needed. The gate would close at
+about 24 minutes out
 for a 10% shortfall, or earlier for a larger one.
 
 **Tests.** `tests/test_battery_protect_target.py` replaces
 `test_battery_protect_window.py`, 17 cases. Adds: allowed while recovery time
 remains, blocked once it runs out, larger shortfalls engage earlier, the shed
 hold kept while recoverable, and a missing capacity. Full suite: 932 passed.
+
+### 18. Battery target protection: grid-charge exemption and two-stage charge model (0.3.13)
+
+**Problem with 0.3.12.** A minute-by-minute simulation of one installation
+(22.4 kWh GoodWe, Ergon 14C, pool 1.8 kW needing 3 h a day, deadline 17:20;
+see `tests/battery_protect_sim.py`) found one case where protection made
+things worse. On an overcast day (PV 20% of 2026-09-26, SoC 40% at 11:00) it
+engaged at 12:19 and blocked the pool's 0.18 slots. Must-run later forced the
+pool on after 15:50, in the 0.45 peak, running from the battery: 81 minutes
+and 1.78 kWh, against 32 minutes and 0.70 kWh with protection off. There were two causes:
+
+- The gate kept blocking while the battery was already being grid-charged.
+  Appliance load is then met by extra import and does not slow the charge,
+  so blocking it only moves runtime out of the cheap window.
+- One charge rate for the whole shortfall. A rate that is right for the
+  tapered top of charge overstates the time needed from low SoC by about a
+  third, so the gate engaged hours too early.
+
+**Fix.**
+
+- The gate stands aside while the battery charges at 500 W or more and the
+  site imports at 200 W or more at the same time. In self-consumption that
+  combination only happens during a forced grid charge.
+- Two new options on the Battery step: `battery_protect_bulk_rate_w` (default
+  0, which means the assured rate applies throughout, as in 0.3.12) and
+  `battery_protect_taper_soc` (default 90). Below the taper SoC the bulk rate
+  applies; above it, the assured rate.
+
+**Results** (off vs 6000 W assured, 10 min margin, 9000 W bulk):
+
+- Overcast: 0.73 kWh from the battery after 15:50, against 0.70 with
+  protection off and 1.78 with the 0.3.12 logic.
+- Cloudy with no grid charge: SoC at 15:50 is 32.6% vs 27.1%, 3 h still met.
+- Sunny or mixed days: runtime and SoC unchanged within minutes.
+
+Setting the pool's end time and deadline to 15:50 kept every scenario out of
+the peak whatever the gate setting, with the 3 h minimum still met to within
+a few minutes.
+
+**Tests.**
+
+- `tests/test_battery_protect_target.py` adds 11 cases covering the
+  two-stage times, the grid-charge exemption and its thresholds, and that
+  shed is still instantaneous without a grid charge.
+- `tests/test_battery_protect_scenarios.py` adds 20 whole-afternoon
+  scenarios through the real optimizer, compared against protection off.
+  Run against the 0.3.12 logic, 9 of the new tests fail, including the
+  overcast regression.
+- Full suite: 963 passed.
+
+Also corrected: sections 16 and 17 described 2026-09-26 against a 16:00
+target. The target on the day was 15:50. The conclusions are unchanged.
 
 ---
 

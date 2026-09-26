@@ -15,8 +15,12 @@ from datetime import time, timedelta
 from zoneinfo import ZoneInfo
 
 from custom_components.pv_excess_control.const import (
+    BATTERY_PROTECT_GRID_CHARGE_MIN_W,
+    BATTERY_PROTECT_GRID_IMPORT_MIN_W,
+    DEFAULT_BATTERY_PROTECT_BULK_RATE,
     DEFAULT_BATTERY_PROTECT_CHARGE_RATE,
     DEFAULT_BATTERY_PROTECT_MARGIN,
+    DEFAULT_BATTERY_PROTECT_TAPER_SOC,
     DEFAULT_CONTROLLER_INTERVAL,
     DEFAULT_DYNAMIC_ON_THRESHOLD,
     DEFAULT_GRID_VOLTAGE,
@@ -63,6 +67,8 @@ class Optimizer:
         battery_protect_charge_rate_w: float = DEFAULT_BATTERY_PROTECT_CHARGE_RATE,
         battery_protect_margin_minutes: float = DEFAULT_BATTERY_PROTECT_MARGIN,
         battery_capacity_kwh: float | None = None,
+        battery_protect_bulk_rate_w: float = DEFAULT_BATTERY_PROTECT_BULK_RATE,
+        battery_protect_taper_soc: float = DEFAULT_BATTERY_PROTECT_TAPER_SOC,
     ) -> None:
         self.grid_voltage = grid_voltage
         self._tz = ZoneInfo(timezone_str) if timezone_str else None
@@ -81,6 +87,15 @@ class Optimizer:
             minutes=max(0.0, float(battery_protect_margin_minutes or 0))
         )
         self._battery_capacity_kwh = float(battery_capacity_kwh) if battery_capacity_kwh else None
+        bulk = max(0.0, float(battery_protect_bulk_rate_w or 0)) / 1000.0
+        self._battery_protect_bulk_kw = bulk if bulk > 0 else self._battery_protect_rate_kw
+        self._battery_protect_taper_soc = min(
+            100.0, max(0.0, float(
+                DEFAULT_BATTERY_PROTECT_TAPER_SOC
+                if battery_protect_taper_soc is None else battery_protect_taper_soc
+            ))
+        )
+        self._current_power_state: PowerState | None = None
         # Initialised here for safety; optimize() overwrites both on every cycle.
         self._plan_influence: str = "none"
         self._grid_supplement_count: int = 0
@@ -112,6 +127,7 @@ class Optimizer:
         self._plan_influence = plan_influence
         self._grid_supplement_count = 0
         self._current_battery_soc = power_state.battery_soc
+        self._current_power_state = power_state
         self._current_plan = plan
 
         # Build lookup of appliance states by ID
@@ -468,34 +484,29 @@ class Optimizer:
             is known,
           - the plan has a battery target and a current SoC reading exists,
           - SoC is below target_soc and now is before target_time,
-          - the time left is no longer enough to charge the shortfall at the
-            assured rate plus the margin:
-
-                shortfall_kwh / rate_kw + margin >= time_left
+          - the battery is not already being charged from the grid, and
+          - the time left is no longer enough to charge the shortfall, plus
+            the margin (see _battery_protect_charge_time).
 
         While engaged, for ``appliance``:
           1. no grid-supplement path may start it or raise its current, and
           2. SHED ignores the deadline-aware averaged-excess skip.
 
-        Why feasibility rather than a fixed window: on a tariff where the
-        pre-peak day rate is the cheapest grid energy available (Ergon 14C,
-        0.18 vs 0.25 overnight and 0.45 peak), running an appliance from the
-        grid before the peak is the right call, even when that energy is
+        Why feasibility rather than a fixed window (0.3.12): on Ergon 14C the
+        pre-peak day rate (0.18) is the cheapest grid energy of the day, so
+        running an appliance before the peak is right even when the energy is
         routed through the battery, provided the battery can still be
-        refilled before the target time. A fixed window blocked exactly that.
-        The shortfall only matters once there is no longer time to recover it.
+        refilled before the target time.
 
-        Observed 2026-09-26, target 100% by 16:00, 22.4 kWh battery: the pool
-        started on grid supplement at 15:21 with SoC 90%, then was held on
-        through three "shed imminent" cycles while the battery discharged.
-        A grid charge from 15:31 still reached 99% by 15:49 (about 7 kW
-        average across 90-99%). With a 7000 W assured rate and a 5 min
-        margin, the gate stays open at 15:21 (19 + 5 min needed, 39 left)
-        and closes only when the recovery time genuinely runs out.
-
-        The assured rate should be what the system can actually deliver
-        near the top of charge (CC-CV taper included), from grid if grid
-        charging is available, otherwise from typical late-afternoon PV.
+        Why stand aside during grid charging (0.3.13): charging and importing
+        at the same time means something (Predbat, an automation, this
+        integration) is already grid-charging the battery. Appliance load is
+        then met by extra import and does not slow the charge, so blocking
+        it only pushes appliance runtime out of the cheap window. Simulated
+        overcast day (SoC 40% at 11:00, PV 20% of 2026-09-26, pool needing
+        3 h, deadline 17:20): without this the pool lost its 18c slots while
+        the battery was being charged and was later forced on by must-run
+        into the 0.45 peak, running from the battery.
 
         ``battery_target_gated`` appliances are exempt: they are the charging
         path. Missing data never engages the gate.
@@ -509,8 +520,11 @@ class Optimizer:
         battery_target = self._current_plan.battery_target
         if battery_target is None or battery_target.target_soc is None:
             return False
-        shortfall_pct = battery_target.target_soc - self._current_battery_soc
-        if shortfall_pct <= 0:
+        soc = self._current_battery_soc
+        target_soc = battery_target.target_soc
+        if soc >= target_soc:
+            return False
+        if self._battery_being_grid_charged():
             return False
 
         from datetime import datetime
@@ -524,18 +538,56 @@ class Optimizer:
         if time_left <= timedelta(0):
             return False
 
-        shortfall_kwh = shortfall_pct / 100.0 * self._battery_capacity_kwh
-        needed = timedelta(hours=shortfall_kwh / self._battery_protect_rate_kw)
+        needed = self._battery_protect_charge_time(soc, target_soc)
         engaged = needed + self._battery_protect_margin >= time_left
         if engaged:
             _LOGGER.debug(
-                "Battery protection engaged for %s: %.2f kWh short, "
-                "%s needed at %.1f kW + %s margin, %s left",
-                appliance.name, shortfall_kwh, needed,
-                self._battery_protect_rate_kw, self._battery_protect_margin,
-                time_left,
+                "Battery protection engaged for %s: SoC %.0f%% -> %.0f%%, "
+                "%s needed + %s margin, %s left",
+                appliance.name, soc, target_soc, needed,
+                self._battery_protect_margin, time_left,
             )
         return engaged
+
+    def _battery_protect_charge_time(self, soc: float, target_soc: float) -> timedelta:
+        """Time to charge from ``soc`` to ``target_soc`` on the two-stage model.
+
+        Below the taper SoC the bulk rate applies; from the taper SoC up, the
+        assured rate. With no bulk rate configured both stages use the
+        assured rate, which is the 0.3.12 single-rate model.
+
+        On 2026-09-26 the battery took ~8.5 kW at 90% falling to ~5 kW by
+        99% (about 7 kW averaged across 90-99%); below 90% it is limited by
+        the inverter's 9.6 kW. A single tapered rate therefore overstated
+        the time needed from low SoC by roughly a third.
+        """
+        cap = self._battery_capacity_kwh or 0.0
+        taper = self._battery_protect_taper_soc
+        bulk_to = min(max(soc, taper), target_soc)
+        bulk_kwh = max(0.0, bulk_to - soc) / 100.0 * cap
+        top_kwh = max(0.0, target_soc - max(soc, bulk_to)) / 100.0 * cap
+        hours = 0.0
+        if bulk_kwh:
+            hours += bulk_kwh / self._battery_protect_bulk_kw
+        if top_kwh:
+            hours += top_kwh / self._battery_protect_rate_kw
+        return timedelta(hours=hours)
+
+    def _battery_being_grid_charged(self) -> bool:
+        """True when the battery is charging while the site imports.
+
+        In self-consumption the battery only charges from surplus, which
+        means exporting or balanced, never importing. Charging and importing
+        together is therefore a forced grid charge. Thresholds keep meter
+        noise and per-phase imbalance from reading as one.
+        """
+        ps = self._current_power_state
+        if ps is None or ps.battery_power is None or ps.grid_import is None:
+            return False
+        return (
+            ps.battery_power >= BATTERY_PROTECT_GRID_CHARGE_MIN_W
+            and ps.grid_import >= BATTERY_PROTECT_GRID_IMPORT_MIN_W
+        )
 
     def _apply_safety_rules(
         self,
