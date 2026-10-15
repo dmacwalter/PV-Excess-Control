@@ -8,9 +8,11 @@ dashboards, documentation and test suite are all his work. This fork adds a
 small number of battery-SoC-aware safety gates and external-controller options
 on top of that engine.
 
-**Every change below is additive and opt-in.** With all new options left at
-their defaults (`False` / empty), behaviour is identical to upstream. These
-changes are intended to be offered back upstream.
+**New features are additive and opt-in.** With their options left at the
+defaults (`False` / empty), they behave as upstream does. Bug fixes and
+corrections to false readings (for example sections 5, 9 and 24) have no
+setting and apply to everyone. These changes are intended to be offered back
+upstream.
 
 ---
 
@@ -181,6 +183,10 @@ being charged *from the grid*. Upstream's hybrid-branch adjustment adds
 normal self-consumption but double-counts during forced grid charge —
 potentially masking a large grid draw as surplus for any downstream consumer
 reading the same figure.
+
+> **Extended in 0.3.17.** This fix covered only this integration's own forced
+> grid charge, and only on a combined meter. Section 24 applies it to a grid
+> charge from any source, on every meter topology.
 
 ### 6. Deadline-aware shed protection
 
@@ -882,30 +888,40 @@ When the grid charge ends, the battery credit returns on the first cycle.
 
 **Tests.** `tests/test_grid_charged_battery.py`, 24 cases.
 
-20 run on the excess reading, each across three meter topologies: combined,
-export-only, and no grid sensor. Covered:
+20 run on the excess reading. 18 of these are six scenarios, each run on three
+meter topologies (combined, export-only, and no grid sensor):
 
 - the 14:33 readings;
 - solar charging still counted;
 - one cycle of import ignored, using a recorded cloud edge;
 - the credit returning when the charge ends;
-- a discharging battery and a trickle charge;
+- a discharging battery;
+- a trickle charge under 500 W.
+
+The other 2 run on the combined meter only, where the case arises:
+
 - the integration's own forced charge unchanged;
 - a missing battery reading.
 
 4 feed the 14:33 readings through the real optimizer, with the pool past its
 minimum runtime:
 
-- before the fix, the pool stays on as if solar-powered;
+- with the reading not yet confirmed (what every cycle read before 0.3.17),
+  the pool stays on as if solar-powered;
 - after it, at 0.18 against a 0.20 threshold, it stays on as grid supplement;
 - with grid supplement off, or a threshold under 0.18, it is shed.
 
-With the cap removed, the 14:33 cases fail. Full suite: 967 passed.
+With the cap removed, 6 cases fail: the 14:33 reading on all three
+topologies and the three optimizer cases that depend on it. Full suite on
+Home Assistant 2026.9.3: 967 passed.
 
 ---
 
 ## Testing status
 
+- **0.3.17:** full suite 967 passed on Home Assistant 2026.9.3 (Python 3.14).
+  24 new tests in `tests/test_grid_charged_battery.py`; 6 of them fail with
+  the cap removed. See section 24.
 - **0.3.9:** full suite 915 passed, zero failures. 9 new tests in
   `tests/test_runtime_slack.py`, of which 8 fail against unpatched 0.3.8 —
   covering the slack boundaries (met, behind, overnight deadline, window-end
@@ -934,8 +950,8 @@ With the cap removed, the 14:33 cases fail. Full suite: 967 passed.
   ten cases: PV mode, priority mode, case and whitespace variants, unavailable
   priority entity, unavailable power sensor, zero draw, `None` excess, feature
   unconfigured, and incomplete override config.
-- **Not run:** the upstream `pytest` suite, which requires the `homeassistant`
-  package. Config-flow wiring is verified by compilation and inspection only —
+- **Not run before 0.3.2:** the upstream `pytest` suite, which requires the
+  `homeassistant` package. Config-flow wiring is verified by compilation and inspection only —
   walk the config flow once after installing to confirm the new fields render
   as expected.
 
