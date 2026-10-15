@@ -16,6 +16,18 @@ DEFAULT_ON_THRESHOLD = 200  # W excess before turning ON
 DEFAULT_OFF_THRESHOLD = -50  # W excess before turning OFF
 DEFAULT_DYNAMIC_ON_THRESHOLD = 50  # W buffer before starting dynamic current appliance
 
+# Grid-charged battery detection (excess calculation). A battery charging at
+# or above GRID_CHARGE_BATTERY_MIN_W while the site imports at or above
+# GRID_CHARGE_IMPORT_MIN_W is being charged from the grid, whoever ordered it
+# (this integration, Predbat, the inverter's own schedule). In that state the
+# battery's charge power is not solar and must not be credited as excess.
+# Required on GRID_CHARGE_CONFIRM_CYCLES consecutive controller cycles so the
+# few seconds of import an inverter shows while catching up with a cloud
+# edge do not count.
+GRID_CHARGE_BATTERY_MIN_W = 500
+GRID_CHARGE_IMPORT_MIN_W = 200
+GRID_CHARGE_CONFIRM_CYCLES = 2
+
 # Limits
 MIN_PRIORITY = 1
 MAX_PRIORITY = 1000
