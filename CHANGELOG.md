@@ -23,7 +23,7 @@ changes are intended to be offered back upstream.
 | Externally-managed loads (evcc etc.) | Counted as consumption; this integration yields to them | Optional add-back so this integration's appliances take priority instead — with an optional override to reverse it |
 | Cheap-window target current field | Pre-fills with `max_current` even when unset | Genuinely empty until deliberately set |
 | Forced grid charge vs. shedding | No way to guarantee a specific appliance sheds first | `shed_before_grid_charge` flag + hold until the charge cycle resolves (0.3.2) |
-| Battery power during grid charge | Can be double-counted as "excess" | Grid-charge false-positive fix |
+| Battery power during grid charge | Can be double-counted as "excess" | Not counted as excess while charging from the grid, whoever ordered the charge (0.3.17; this integration's own charge only before that) |
 | SHED near appliance deadlines | Reacts to instantaneous excess only | Deadline-aware shed protection via per-appliance averaged excess |
 | Appliance running post-deadline | No battery-state check | Blocked unless battery met its target |
 | Last hours before battery target | Grid supplement and averaged-excess shed skip unaffected by SoC | Unchanged. The battery target gate of 0.3.11-0.3.14 was removed in 0.3.15 |
@@ -820,6 +820,87 @@ and 0.3.16 produced identical traces on four days.
 to Home Assistant 2025.1, which is older than the declared minimum (2025.8)
 and has no config subentries. The full suite passes on the new pin: 943
 tests.
+
+### 24. Grid-charged battery is not counted as excess (0.3.17)
+
+**Problem.** Excess includes whatever the battery is charging at. In the
+combined-meter branch the battery's charge power is added back explicitly;
+in the other hybrid branches it is implicit in `pv - load`. That is right
+when the battery is taking solar, because an appliance switched on would take
+that solar instead. It is wrong when something charges the battery from the
+grid at a fixed rate. The charge does not slow down for the appliance, so
+every watt the appliance draws is extra import.
+
+Section 5 covered this for the integration's own forced grid charge, and only
+in the combined-meter branch. A grid charge ordered by anything else, such as
+Predbat or the inverter's own schedule, was still counted as excess in every
+branch.
+
+Observed 2026-10-15 14:33. Predbat was grid-charging the battery at 9.6 kW
+before the peak:
+
+- PV 6.2 kW, house 4.2 kW including the pool, import 7.6 kW.
+- Excess read +2,015 W (PV minus load), and the pool stayed on:
+  "Staying on (900W drawn) - shed at -100W (current: +2031W)".
+
+**Fix.** `_exclude_grid_charged_battery()` runs after the branch logic in
+`_collect_power_state`. The trigger is the battery charging at 500 W or more
+while the site imports at 200 W or more. These are the same thresholds the
+0.3.13-0.3.14 grid exemption used for "charging from the grid". Import comes
+from the combined meter when there is one. Otherwise it is worked out from
+the energy balance: load + battery charge - PV - export. The state has to
+hold on two consecutive controller cycles, so the few seconds of import an
+inverter shows while it catches up with a cloud edge are ignored. Once
+confirmed, excess is capped at the grid balance (export minus import), which
+drops the battery credit.
+
+The cap can only lower excess. Solar-only charging, a discharging battery, a
+trickle charge under 500 W and missing readings are all unchanged. For this
+integration's own forced grid charge on a combined meter, the result is the
+same as before. Entering and leaving the state are logged at INFO.
+
+No setting. Like section 5, this corrects a false excess reading.
+
+**Effect.** With the 14:33 readings, excess goes from +2,015 W to -7,613 W
+on the second cycle. From there the normal rules decide, and they read the
+appliance's draw as grid energy, not solar:
+
+- If grid supplement is allowed for the appliance at the current tariff, it
+  stays on as "Grid supplement (staying on)". The grid share counts against
+  `max_grid_power` and is attributed to the grid in analytics. On Ergon 14C
+  that is the case before the peak: 0.18 is under a 0.20 cheap threshold.
+- Otherwise it is shed under the usual SHED rules. The slack check
+  (section 14) still protects an appliance behind its minimum daily runtime,
+  and deadline must-run still wins.
+
+So whether an appliance runs during a grid charge is now decided by its
+grid-supplement settings, not by a false solar reading. To keep it off during
+any grid charge, set its cheap price threshold below the rate at which the
+battery is grid-charged, or set a `max_grid_power` below its draw.
+
+When the grid charge ends, the battery credit returns on the first cycle.
+
+**Tests.** `tests/test_grid_charged_battery.py`, 24 cases.
+
+20 run on the excess reading, each across three meter topologies: combined,
+export-only, and no grid sensor. Covered:
+
+- the 14:33 readings;
+- solar charging still counted;
+- one cycle of import ignored, using a recorded cloud edge;
+- the credit returning when the charge ends;
+- a discharging battery and a trickle charge;
+- the integration's own forced charge unchanged;
+- a missing battery reading.
+
+4 feed the 14:33 readings through the real optimizer, with the pool past its
+minimum runtime:
+
+- before the fix, the pool stays on as if solar-powered;
+- after it, at 0.18 against a 0.20 threshold, it stays on as grid supplement;
+- with grid supplement off, or a threshold under 0.18, it is shed.
+
+With the cap removed, the 14:33 cases fail. Full suite: 967 passed.
 
 ---
 

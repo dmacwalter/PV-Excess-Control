@@ -101,6 +101,9 @@ from .const import (
     CONF_TARIFF_PROVIDER,
     CONF_ALLOW_GRID_SUPPLEMENT,
     DEFAULT_CONTROLLER_INTERVAL,
+    GRID_CHARGE_BATTERY_MIN_W,
+    GRID_CHARGE_CONFIRM_CYCLES,
+    GRID_CHARGE_IMPORT_MIN_W,
     DEFAULT_GRID_VOLTAGE,
     DEFAULT_OFF_THRESHOLD,
     DEFAULT_PLANNER_INTERVAL,
@@ -320,6 +323,9 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._grid_charge_engaged: bool = config_entry.data.get("_grid_charge_engaged", False)
         self._grid_charge_engage_ts: float | None = None
         self._grid_charge_shed_pending_since: float | None = None
+        # Consecutive controller cycles showing the grid-charged-battery
+        # signature (see _exclude_grid_charged_battery).
+        self._grid_charged_battery_cycles: int = 0
         # Appliance IDs currently held OFF for battery priority. Persisted so an
         # HA restart mid-hold does not release the pool onto inflated excess
         # (the freed appliance load reads as available headroom for one cycle).
@@ -1420,6 +1426,17 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Neither grid nor load configured — misconfiguration, not outage.
             excess_power = 0.0
 
+        # --- Grid-charged battery: battery charge is not solar excess ---
+        excess_power = self._exclude_grid_charged_battery(
+            excess_power,
+            pv_production=pv_production,
+            load_power=load_power,
+            battery_power=battery_power,
+            grid_export=grid_export,
+            measured_import=grid_import if import_export_entity else None,
+            has_battery=has_battery,
+        )
+
         # --- Externally-managed load add-back ---
         # Applied after all branch logic so it works regardless of inverter
         # topology. See CONF_EXTERNAL_LOAD_POWER in const.py for the rationale.
@@ -1462,6 +1479,88 @@ class PvExcessCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ev_soc=None,
             timestamp=datetime.now(),
         )
+
+    def _exclude_grid_charged_battery(
+        self,
+        excess_power: float | None,
+        *,
+        pv_production: float | None,
+        load_power: float | None,
+        battery_power: float | None,
+        grid_export: float | None,
+        measured_import: float | None,
+        has_battery: bool,
+    ) -> float | None:
+        """Stop a grid-charged battery from being counted as solar excess.
+
+        Every hybrid branch of _collect_power_state credits the battery's
+        charge power as excess (explicitly in the combined-meter branch,
+        implicitly via pv - load in the others). That is right when the
+        battery is soaking up solar, because an appliance switched on would
+        take that solar instead. It is wrong when something else is charging
+        the battery from the grid at a fixed rate: the charge does not slow
+        down for the appliance, so every watt the appliance draws is extra
+        import. The combined-meter branch already skips the credit while this
+        integration's own forced grid charge is engaged (section 5 of the
+        changelog), but not for a grid charge ordered by anything else, such
+        as Predbat or the inverter's own schedule, and not at all in the
+        other branches.
+
+        Observed 2026-10-15 14:33: Predbat grid-charging at 9.6 kW, PV
+        6.2 kW, load 4.2 kW including the pool, import 7.6 kW. Excess read
+        +2015 W (= pv - load), so the pool stayed on as if solar-powered.
+
+        Signature: battery charging at >= GRID_CHARGE_BATTERY_MIN_W while the
+        site imports >= GRID_CHARGE_IMPORT_MIN_W, on
+        GRID_CHARGE_CONFIRM_CYCLES consecutive cycles. Import comes from the
+        combined meter when configured; otherwise it is derived from the
+        energy balance (load + battery charge - pv - export). Once confirmed,
+        excess is capped at the grid balance (export - import), i.e. the
+        battery credit is dropped. The cap only ever lowers excess, so with
+        no grid charge, missing data or no battery this is a no-op.
+        """
+        if excess_power is None or not has_battery or battery_power is None:
+            self._grid_charged_battery_cycles = 0
+            return excess_power
+
+        if measured_import is not None:
+            grid_import = measured_import
+        elif pv_production is not None and load_power is not None:
+            grid_import = max(
+                load_power + battery_power - pv_production - (grid_export or 0.0),
+                0.0,
+            )
+        else:
+            self._grid_charged_battery_cycles = 0
+            return excess_power
+
+        cycles = getattr(self, "_grid_charged_battery_cycles", 0)
+        signature = (
+            battery_power >= GRID_CHARGE_BATTERY_MIN_W
+            and grid_import >= GRID_CHARGE_IMPORT_MIN_W
+        )
+        if not signature:
+            if cycles >= GRID_CHARGE_CONFIRM_CYCLES:
+                _LOGGER.info(
+                    "Grid-charged battery ended; battery charge counts as excess again"
+                )
+            self._grid_charged_battery_cycles = 0
+            return excess_power
+
+        cycles += 1
+        self._grid_charged_battery_cycles = cycles
+        if cycles < GRID_CHARGE_CONFIRM_CYCLES:
+            return excess_power
+
+        grid_balance = (grid_export or 0.0) - grid_import
+        if cycles == GRID_CHARGE_CONFIRM_CYCLES:
+            _LOGGER.info(
+                "Battery is charging from the grid (battery %.0fW, import %.0fW); "
+                "not counting its charge as excess (%.0fW -> %.0fW)",
+                battery_power, grid_import, excess_power,
+                min(excess_power, grid_balance),
+            )
+        return min(excess_power, grid_balance)
 
     def _external_load_has_priority(self, data: dict) -> bool:
         """Return True when the external load's priority override is active.
